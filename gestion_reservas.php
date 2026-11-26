@@ -343,7 +343,7 @@ $resTiposPrestamo = mysqli_query($conexion, "SELECT id_tipo_prestamo, tipo FROM 
                                         <th>Libro</th>
                                         <th>Fechas</th>
                                         <th><?= htmlspecialchars($encabezadoCol4) ?></th>
-                                        <th class="text-end">Acciones</th>
+                                        <th class="text-end text-nowrap">Acciones</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -382,7 +382,7 @@ $resTiposPrestamo = mysqli_query($conexion, "SELECT id_tipo_prestamo, tipo FROM 
                                                         <span class="estado-secundario">Cancelada</span>
                                                     <?php endif; ?>
                                                 </td>
-                                                <td class="text-end">
+                                                <td class="text-end text-nowrap">
                                                     <?php if ($estadoActual === 'activas'): ?>
                                                         <button
                                                             type="button"
