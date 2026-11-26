@@ -116,9 +116,9 @@ if ($stmt) {
                         <div class="alert alert-warning py-2">El libro fue eliminado del inventario y del catálogo.</div>
                     <?php endif; ?>
 
-                    <form method="GET" action="inventario_libros.php" class="panel p-3 mb-4">
+                                        <form method="GET" action="inventario_libros.php" class="panel p-3 mb-4">
                         <div class="row g-2 align-items-center">
-                            <div class="col-md-5">
+                            <div class="<?= ($busqueda !== '' || $idCategoria > 0) ? 'col-md-6' : 'col-md-7' ?>">
                                 <div class="input-group">
                                     <span class="input-group-text bg-white border-end-0">
                                         <svg class="icon text-secondary"><use href="#i-search" /></svg>
@@ -128,12 +128,12 @@ if ($stmt) {
                                         name="q"
                                         class="form-control border-start-0"
                                         value="<?= htmlspecialchars($busqueda) ?>"
-                                        placeholder="Buscar por título, autor o ISBN"
+                                        placeholder="Buscar por título, autor o ISBN (presiona Enter)"
                                     />
                                 </div>
                             </div>
 
-                            <div class="col-md-4">
+                            <div class="<?= ($busqueda !== '' || $idCategoria > 0) ? 'col-md-4' : 'col-md-5' ?>">
                                 <select name="categoria" class="form-select" onchange="this.form.submit()" aria-label="Filtrar por categoría">
                                     <option value="0">Todas las categorías</option>
                                     <?php if ($resCategorias && mysqli_num_rows($resCategorias) > 0): ?>
@@ -146,10 +146,11 @@ if ($stmt) {
                                 </select>
                             </div>
 
-                            <div class="col-md-3 d-flex gap-2">
-                                <button type="submit" class="btn btn-brand flex-grow-1">Filtrar</button>
-                                <a href="inventario_libros.php" class="btn btn-outline-brand">Limpiar</a>
-                            </div>
+                            <?php if ($busqueda !== '' || $idCategoria > 0): ?>
+                                <div class="col-md-2 d-grid">
+                                    <a href="inventario_libros.php" class="btn btn-outline-brand">Limpiar</a>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </form>
 

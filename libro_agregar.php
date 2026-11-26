@@ -162,12 +162,12 @@ $resAutores     = mysqli_query($conexion, "SELECT id_autor, CONCAT_WS(' ', nombr
         <div class="admin-layout">
             <?php include "includes/sidebar_bibliotecario.php"; ?>
 
-            <main class="admin-main">
+                        <main class="admin-main">
                 <div class="admin-content">
                     <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
                         <div>
                             <h1 class="page-title">Alta de libro</h1>
-                            <p class="page-subtitle mb-0">Registra un nuevo libro en el inventario y configura su publicación en el catálogo.</p>
+                            <p class="page-subtitle mb-0">Completa primero los datos generales del ejemplar y debajo configura su publicación.</p>
                         </div>
                         <a href="inventario_libros.php" class="btn btn-outline-brand">
                             <svg class="icon"><use href="#i-arrow-left" /></svg> Ir al inventario
@@ -178,128 +178,136 @@ $resAutores     = mysqli_query($conexion, "SELECT id_autor, CONCAT_WS(' ', nombr
                         <div class="alert alert-danger py-2"><?= htmlspecialchars($error) ?></div>
                     <?php endif; ?>
 
-                    <form id="formLibro" method="POST" action="" enctype="multipart/form-data" novalidate class="panel p-4">
-                        <div class="row g-4">
-                            <div class="col-lg-7">
-                                <h2 class="h5 fw-semibold section-green-title mb-3">Datos generales del libro</h2>
+                    <form id="formLibro" method="POST" action="" enctype="multipart/form-data" novalidate>
+                        <!-- Bloque 1: Datos generales a todo lo ancho -->
+                        <section class="panel p-4 mb-4">
+                            <h2 class="h5 fw-semibold section-green-title mb-3">1. Datos generales del libro</h2>
 
-                                <div class="mb-3">
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-8">
                                     <label for="titulo_libro" class="form-label fw-medium">Título del libro *</label>
                                     <input type="text" name="titulo_libro" id="titulo_libro" class="form-control" value="<?= htmlspecialchars($_POST['titulo_libro'] ?? '') ?>" />
                                     <div id="feedback-titulo" class="invalid-feedback"></div>
                                 </div>
 
-                                <div class="row g-3 mb-3">
-                                    <div class="col-sm-6">
-                                        <label for="id_autor" class="form-label fw-medium">Autor *</label>
-                                        <select name="id_autor" id="id_autor" class="form-select">
-                                            <option value="0">Selecciona un autor</option>
-                                            <?php while ($aut = mysqli_fetch_assoc($resAutores)): ?>
-                                                <option value="<?= $aut['id_autor'] ?>" <?= ((int)($_POST['id_autor'] ?? 0) === (int)$aut['id_autor']) ? 'selected' : '' ?>>
-                                                    <?= htmlspecialchars($aut['nombre_completo']) ?>
-                                                </option>
-                                            <?php endwhile; ?>
-                                        </select>
-                                        <div id="feedback-autor" class="invalid-feedback"></div>
-                                    </div>
-
-                                    <div class="col-sm-6">
-                                        <label for="id_categoria" class="form-label fw-medium">Categoría *</label>
-                                        <select name="id_categoria" id="id_categoria" class="form-select">
-                                            <option value="0">Selecciona una categoría</option>
-                                            <?php while ($cat = mysqli_fetch_assoc($resCategorias)): ?>
-                                                <option value="<?= $cat['id_categoria'] ?>" <?= ((int)($_POST['id_categoria'] ?? 0) === (int)$cat['id_categoria']) ? 'selected' : '' ?>>
-                                                    <?= htmlspecialchars($cat['nombre']) ?>
-                                                </option>
-                                            <?php endwhile; ?>
-                                        </select>
-                                        <div id="feedback-categoria" class="invalid-feedback"></div>
-                                    </div>
-                                </div>
-
-                                <div class="row g-3 mb-3">
-                                    <div class="col-sm-6">
-                                        <label for="id_editorial" class="form-label fw-medium">Editorial *</label>
-                                        <select name="id_editorial" id="id_editorial" class="form-select">
-                                            <option value="0">Selecciona una editorial</option>
-                                            <?php while ($ed = mysqli_fetch_assoc($resEditoriales)): ?>
-                                                <option value="<?= $ed['id_editorial'] ?>" <?= ((int)($_POST['id_editorial'] ?? 0) === (int)$ed['id_editorial']) ? 'selected' : '' ?>>
-                                                    <?= htmlspecialchars($ed['nombre_editorial']) ?>
-                                                </option>
-                                            <?php endwhile; ?>
-                                        </select>
-                                        <div id="feedback-editorial" class="invalid-feedback"></div>
-                                    </div>
-
-                                    <div class="col-sm-6">
-                                        <label for="id_idioma" class="form-label fw-medium">Idioma *</label>
-                                        <select name="id_idioma" id="id_idioma" class="form-select">
-                                            <option value="0">Selecciona un idioma</option>
-                                            <?php while ($idm = mysqli_fetch_assoc($resIdiomas)): ?>
-                                                <option value="<?= $idm['id_idioma'] ?>" <?= ((int)($_POST['id_idioma'] ?? 0) === (int)$idm['id_idioma']) ? 'selected' : '' ?>>
-                                                    <?= htmlspecialchars($idm['nombre_idioma']) ?>
-                                                </option>
-                                            <?php endwhile; ?>
-                                        </select>
-                                        <div id="feedback-idioma" class="invalid-feedback"></div>
-                                    </div>
-                                </div>
-
-                                <div class="row g-3 mb-3">
-                                    <div class="col-sm-6">
-                                        <label for="isbn" class="form-label fw-medium">ISBN *</label>
-                                        <input type="text" name="isbn" id="isbn" class="form-control" value="<?= htmlspecialchars($_POST['isbn'] ?? '') ?>" />
-                                        <div id="feedback-isbn" class="invalid-feedback"></div>
-                                    </div>
-
-                                    <div class="col-sm-6">
-                                        <label for="paginas" class="form-label fw-medium">Páginas</label>
-                                        <input type="number" min="1" name="paginas" id="paginas" class="form-control" value="<?= htmlspecialchars($_POST['paginas'] ?? '') ?>" />
-                                        <div id="feedback-paginas" class="invalid-feedback"></div>
-                                    </div>
-                                </div>
-
-                                <div class="row g-3">
-                                    <div class="col-sm-5">
-                                        <label for="ejemplares" class="form-label fw-medium">Ejemplares iniciales *</label>
-                                        <input type="number" min="0" name="ejemplares" id="ejemplares" class="form-control" value="<?= htmlspecialchars($_POST['ejemplares'] ?? '1') ?>" />
-                                        <div id="feedback-ejemplares" class="invalid-feedback"></div>
-                                    </div>
-
-                                    <div class="col-sm-7">
-                                        <label for="localizacion" class="form-label fw-medium">Ubicación en estante</label>
-                                        <input type="text" name="localizacion" id="localizacion" class="form-control" placeholder="Ej. Estante A1, Nivel 2" value="<?= htmlspecialchars($_POST['localizacion'] ?? '') ?>" />
-                                    </div>
+                                <div class="col-md-4">
+                                    <label for="isbn" class="form-label fw-medium">ISBN *</label>
+                                    <input type="text" name="isbn" id="isbn" class="form-control" value="<?= htmlspecialchars($_POST['isbn'] ?? '') ?>" />
+                                    <div id="feedback-isbn" class="invalid-feedback"></div>
                                 </div>
                             </div>
 
-                            <div class="col-lg-5 border-start-lg">
-                                <h2 class="h5 fw-semibold section-green-title mb-3">Publicación en catálogo</h2>
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-4">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <label for="id_autor" class="form-label fw-medium mb-0">Autor *</label>
+                                        <a href="autores.php" class="small text-decoration-none section-green-title fw-medium">+ Agregar autor</a>
+                                    </div>
+                                    <select name="id_autor" id="id_autor" class="form-select">
+                                        <option value="0">Selecciona un autor</option>
+                                        <?php while ($aut = mysqli_fetch_assoc($resAutores)): ?>
+                                            <option value="<?= $aut['id_autor'] ?>" <?= ((int)($_POST['id_autor'] ?? 0) === (int)$aut['id_autor']) ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($aut['nombre_completo']) ?>
+                                            </option>
+                                        <?php endwhile; ?>
+                                    </select>
+                                    <div id="feedback-autor" class="invalid-feedback"></div>
+                                </div>
 
-                                <div class="mb-3">
+                                <div class="col-md-4">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <label for="id_editorial" class="form-label fw-medium mb-0">Editorial *</label>
+                                        <a href="editoriales.php" class="small text-decoration-none section-green-title fw-medium">+ Agregar editorial</a>
+                                    </div>
+                                    <select name="id_editorial" id="id_editorial" class="form-select">
+                                        <option value="0">Selecciona una editorial</option>
+                                        <?php while ($ed = mysqli_fetch_assoc($resEditoriales)): ?>
+                                            <option value="<?= $ed['id_editorial'] ?>" <?= ((int)($_POST['id_editorial'] ?? 0) === (int)$ed['id_editorial']) ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($ed['nombre_editorial']) ?>
+                                            </option>
+                                        <?php endwhile; ?>
+                                    </select>
+                                    <div id="feedback-editorial" class="invalid-feedback"></div>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label for="id_categoria" class="form-label fw-medium mb-1">Categoría *</label>
+                                    <select name="id_categoria" id="id_categoria" class="form-select">
+                                        <option value="0">Selecciona una categoría</option>
+                                        <?php while ($cat = mysqli_fetch_assoc($resCategorias)): ?>
+                                            <option value="<?= $cat['id_categoria'] ?>" <?= ((int)($_POST['id_categoria'] ?? 0) === (int)$cat['id_categoria']) ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($cat['nombre']) ?>
+                                            </option>
+                                        <?php endwhile; ?>
+                                    </select>
+                                    <div id="feedback-categoria" class="invalid-feedback"></div>
+                                </div>
+                            </div>
+
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <label for="id_idioma" class="form-label fw-medium">Idioma *</label>
+                                    <select name="id_idioma" id="id_idioma" class="form-select">
+                                        <option value="0">Selecciona un idioma</option>
+                                        <?php while ($idm = mysqli_fetch_assoc($resIdiomas)): ?>
+                                            <option value="<?= $idm['id_idioma'] ?>" <?= ((int)($_POST['id_idioma'] ?? 0) === (int)$idm['id_idioma']) ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($idm['nombre_idioma']) ?>
+                                            </option>
+                                        <?php endwhile; ?>
+                                    </select>
+                                    <div id="feedback-idioma" class="invalid-feedback"></div>
+                                </div>
+
+                                <div class="col-md-3">
+                                    <label for="paginas" class="form-label fw-medium">Páginas</label>
+                                    <input type="number" min="1" name="paginas" id="paginas" class="form-control" value="<?= htmlspecialchars($_POST['paginas'] ?? '') ?>" />
+                                    <div id="feedback-paginas" class="invalid-feedback"></div>
+                                </div>
+
+                                <div class="col-md-2">
+                                    <label for="ejemplares" class="form-label fw-medium">Ejemplares *</label>
+                                    <input type="number" min="0" name="ejemplares" id="ejemplares" class="form-control" value="<?= htmlspecialchars($_POST['ejemplares'] ?? '1') ?>" />
+                                    <div id="feedback-ejemplares" class="invalid-feedback"></div>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label for="localizacion" class="form-label fw-medium">Ubicación en estante</label>
+                                    <input type="text" name="localizacion" id="localizacion" class="form-control" placeholder="Ej. Estante A1, Nivel 2" value="<?= htmlspecialchars($_POST['localizacion'] ?? '') ?>" />
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Bloque 2: Publicación en catálogo debajo -->
+                        <section class="panel p-4">
+                            <h2 class="h5 fw-semibold section-green-title mb-3">2. Publicación en catálogo</h2>
+
+                            <div class="row g-4">
+                                <div class="col-md-5">
                                     <label for="portada" class="form-label fw-medium">Portada (opcional)</label>
                                     <input type="file" name="portada" id="portada" class="form-control" accept="image/jpeg, image/png, image/webp" />
-                                    <div class="form-text">JPG, PNG o WEBP hasta 2 MB. Se guardará como libro + ID en principales.</div>
+                                    <div class="form-text">JPG, PNG o WEBP hasta 2 MB. Sin portada se mostrará una genérica verde con el título.</div>
                                 </div>
 
-                                <div class="mb-3">
+                                <div class="col-md-7">
                                     <label for="sinopsis" class="form-label fw-medium">Sinopsis</label>
-                                    <textarea name="sinopsis" id="sinopsis" rows="5" maxlength="1000" class="form-control" placeholder="Escribe de qué trata el libro"><?= htmlspecialchars($_POST['sinopsis'] ?? '') ?></textarea>
+                                    <textarea name="sinopsis" id="sinopsis" rows="3" maxlength="1000" class="form-control" placeholder="Escribe brevemente de qué trata el libro"><?= htmlspecialchars($_POST['sinopsis'] ?? '') ?></textarea>
                                     <p id="contador-sinopsis" class="small text-secondary text-end mt-1 mb-0">0 / 1,000 caracteres</p>
                                 </div>
+                            </div>
 
-                                <div class="form-check mb-4">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 pt-3 mt-3 border-top">
+                                <div class="form-check mb-0">
                                     <?php
                                     $marcarPublicado = ($_SERVER['REQUEST_METHOD'] === 'POST') ? isset($_POST['publicado']) : true;
                                     ?>
                                     <input type="checkbox" name="publicado" id="publicado" class="form-check-input" value="1" <?= $marcarPublicado ? 'checked' : '' ?> />
                                     <label for="publicado" class="form-check-label fw-medium">Publicar en el catálogo</label>
-                                    <p class="small text-secondary mb-0">Si lo desmarcas, quedará guardado en inventario sin mostrarse a los lectores.</p>
+                                    <span class="small text-secondary d-block">Si lo desmarcas, quedará en inventario sin mostrarse a los lectores.</span>
                                 </div>
 
-                                <button type="submit" class="btn btn-brand w-100 py-2">Guardar libro</button>
+                                <button type="submit" class="btn btn-brand px-4 py-2">Guardar libro</button>
                             </div>
-                        </div>
+                        </section>
                     </form>
                 </div>
             </main>
