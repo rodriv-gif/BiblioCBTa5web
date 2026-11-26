@@ -304,7 +304,6 @@ $resAutores     = mysqli_query($conexion, "SELECT id_autor, CONCAT_WS(' ', nombr
                 </div>
             </main>
         </div>
-         <?php include "includes/footer.php"; ?>
         <script src="./js/ver_password.js"></script>                                      
         <script src="./js/validar_libro.js"></script>
         <script src="./js/bootstrap.bundle.min.js"></script>

@@ -263,7 +263,6 @@ if ($stmt) {
         if ($stmt) {
             mysqli_stmt_close($stmt);
         }
-        include "includes/footer.php";
         ?>
         <script src="./js/ver_password.js"></script>
     </body>

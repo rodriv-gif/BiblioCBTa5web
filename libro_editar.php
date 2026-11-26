@@ -398,7 +398,6 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
         </div>
 
         <?php mysqli_stmt_close($stmtRap); ?>
-        <?php include "includes/footer.php"; ?>
         <script src="./js/ver_password.js"></script>
         <script src="./js/validar_libro.js"></script>
         <script src="./js/bootstrap.bundle.min.js"></script>
