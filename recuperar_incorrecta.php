@@ -13,7 +13,7 @@ if (!isset($_SESSION["recuperar_cuenta"])) {
 
 $clave = $_SESSION["recuperar_clave"];
 // Cuántos intentos le quedan (el máximo es 3)
-$quedan = 3 - intentos_recuperacion($pdo, $clave);
+$quedan = 3 - intentos_recuperacion($conexion, $clave);
 
 // Si ya no le quedan intentos, se manda a la pantalla de bloqueo
 if ($quedan <= 0) {
@@ -22,14 +22,17 @@ if ($quedan <= 0) {
 }
 
 // Se vuelve a buscar la pregunta de seguridad para mostrarla otra vez
-$consulta = $pdo->prepare(
+$id_cuenta = $_SESSION["recuperar_cuenta"];
+$consulta = mysqli_prepare(
+    $conexion,
     "SELECT p.pregunta
      FROM tblcuentas_lector c
      JOIN tblpreguntas_seguridad p ON p.id_pregunta = c.id_pregunta
      WHERE c.id_cuenta = ?"
 );
-$consulta->execute([$_SESSION["recuperar_cuenta"]]);
-$cuenta = $consulta->fetch();
+mysqli_stmt_bind_param($consulta, "i", $id_cuenta);
+mysqli_stmt_execute($consulta);
+$cuenta = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 ?>
 
 <!doctype html>

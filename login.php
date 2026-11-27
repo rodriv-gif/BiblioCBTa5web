@@ -26,18 +26,21 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     // 1. Bloqueo: 5 intentos fallidos en los últimos 10 minutos
     $desde = date("Y-m-d H:i:s", time() - 600);
-    $consulta = $pdo->prepare("SELECT COUNT(*) FROM tblintentos_acceso WHERE clave_acceso = ? AND exitoso = 0 AND fecha_intento >= ?");
-    $consulta->execute([$clave, $desde]);
+    $consulta = mysqli_prepare($conexion, "SELECT COUNT(*) FROM tblintentos_acceso WHERE clave_acceso = ? AND exitoso = 0 AND fecha_intento >= ?");
+    mysqli_stmt_bind_param($consulta, "ss", $clave, $desde);
+    mysqli_stmt_execute($consulta);
+    $fila = mysqli_fetch_row(mysqli_stmt_get_result($consulta));
 
-    if ($consulta->fetchColumn() >= 5) {
+    if ($fila[0] >= 5) {
         $error = "Demasiados intentos fallidos. Intenta de nuevo en 10 minutos.";
     } else {
         $destino = "";
 
         // 2. ¿Es bibliotecario? (se busca por usuario)
-        $consulta = $pdo->prepare("SELECT id_bibliotecario, id_perfil, usuario, contrasenia FROM tblbibliotecario WHERE usuario = ?");
-        $consulta->execute([$clave]);
-        $bibliotecario = $consulta->fetch();
+        $consulta = mysqli_prepare($conexion, "SELECT id_bibliotecario, id_perfil, usuario, contrasenia FROM tblbibliotecario WHERE usuario = ?");
+        mysqli_stmt_bind_param($consulta, "s", $clave);
+        mysqli_stmt_execute($consulta);
+        $bibliotecario = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
         if ($bibliotecario && contrasenia_correcta($password, $bibliotecario["contrasenia"])) {
             $_SESSION["tipo"] = "bibliotecario";
@@ -47,7 +50,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $destino = "gestion_reservas.php";
         } else {
             // 3. ¿Es alumno o docente? (se busca por matrícula o número de control)
-            $consulta = $pdo->prepare(
+            $consulta = mysqli_prepare(
+                $conexion,
                 "SELECT c.id_cuenta, c.matricula, c.numero_control, c.contrasenia, c.activa,
                         COALESCE(a.nombre, t.nombre) AS nombre,
                         COALESCE(a.estado, t.estado) AS estado
@@ -56,8 +60,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                  LEFT JOIN tbltrabajadores t ON t.numero_control = c.numero_control
                  WHERE c.matricula = ? OR c.numero_control = ?"
             );
-            $consulta->execute([$clave, $clave]);
-            $lector = $consulta->fetch();
+            mysqli_stmt_bind_param($consulta, "ss", $clave, $clave);
+            mysqli_stmt_execute($consulta);
+            $lector = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
             if ($lector && contrasenia_correcta($password, $lector["contrasenia"])) {
                 if ($lector["activa"] != 1) {
@@ -79,8 +84,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         // 4. Se guarda el intento y, si fue correcto, se entra
         $exitoso = $destino !== "" ? 1 : 0;
-        $consulta = $pdo->prepare("INSERT INTO tblintentos_acceso (clave_acceso, exitoso, fecha_intento) VALUES (?, ?, ?)");
-        $consulta->execute([$clave, $exitoso, $ahora]);
+        $consulta = mysqli_prepare($conexion, "INSERT INTO tblintentos_acceso (clave_acceso, exitoso, fecha_intento) VALUES (?, ?, ?)");
+        mysqli_stmt_bind_param($consulta, "sis", $clave, $exitoso, $ahora);
+        mysqli_stmt_execute($consulta);
 
         if ($destino !== "") {
             header("Location: " . $destino);

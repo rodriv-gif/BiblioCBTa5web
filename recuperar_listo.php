@@ -25,8 +25,11 @@ if ($password !== $_POST["confirmar"]) {
 }
 
 // Todo bien: se guarda la nueva contraseña encriptada
-$consulta = $pdo->prepare("UPDATE tblcuentas_lector SET contrasenia = ? WHERE id_cuenta = ?");
-$consulta->execute([password_hash($password, PASSWORD_DEFAULT), $_SESSION["recuperar_ok"]]);
+$contrasenia = password_hash($password, PASSWORD_DEFAULT);
+$id_cuenta = $_SESSION["recuperar_ok"];
+$consulta = mysqli_prepare($conexion, "UPDATE tblcuentas_lector SET contrasenia = ? WHERE id_cuenta = ?");
+mysqli_stmt_bind_param($consulta, "si", $contrasenia, $id_cuenta);
+mysqli_stmt_execute($consulta);
 
 // Se termina el proceso de recuperación
 unset($_SESSION["recuperar_cuenta"], $_SESSION["recuperar_clave"], $_SESSION["recuperar_ok"]);

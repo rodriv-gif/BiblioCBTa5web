@@ -7,11 +7,12 @@ if (($_SESSION["tipo"] ?? "") === "lector") {
     exit;
 }
 date_default_timezone_set("America/Mexico_City");
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/funciones.php";
 require "includes/correo.php";
 
-$preguntas = $pdo->query("SELECT id_pregunta, pregunta FROM tblpreguntas_seguridad ORDER BY id_pregunta")->fetchAll();
+$resultado = mysqli_query($conexion, "SELECT id_pregunta, pregunta FROM tblpreguntas_seguridad ORDER BY id_pregunta");
+$preguntas = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
 $error = "";
 $clave = "";
 $id_pregunta = "";
@@ -23,18 +24,21 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $respuesta = normalizar_respuesta($_POST["respuesta"]);
 
     // La matrícula o clave debe ser de un alumno o trabajador
-    $consulta = $pdo->prepare(
+    $consulta = mysqli_prepare(
+        $conexion,
         "SELECT matricula, NULL AS numero_control, nombre, email, estado FROM tblalumnos WHERE matricula = ?
          UNION
          SELECT NULL, numero_control, nombre, email, estado FROM tbltrabajadores WHERE numero_control = ?"
     );
-    $consulta->execute([$clave, $clave]);
-    $persona = $consulta->fetch();
+    mysqli_stmt_bind_param($consulta, "ss", $clave, $clave);
+    mysqli_stmt_execute($consulta);
+    $persona = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
     // ¿Ya tiene una cuenta?
-    $consulta = $pdo->prepare("SELECT id_cuenta, activa FROM tblcuentas_lector WHERE matricula = ? OR numero_control = ?");
-    $consulta->execute([$clave, $clave]);
-    $cuenta = $consulta->fetch();
+    $consulta = mysqli_prepare($conexion, "SELECT id_cuenta, activa FROM tblcuentas_lector WHERE matricula = ? OR numero_control = ?");
+    mysqli_stmt_bind_param($consulta, "ss", $clave, $clave);
+    mysqli_stmt_execute($consulta);
+    $cuenta = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
     if (strlen($password) < 8) {
         $error = "La contraseña debe tener mínimo 8 caracteres.";
@@ -49,30 +53,33 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } elseif ($cuenta && $cuenta["activa"] == 1) {
         $error = "Ya tienes una cuenta. Inicia sesión.";
     } else {
-        $borrar = $pdo->prepare("DELETE FROM tblcuentas_lector WHERE id_cuenta = ?");
+        $id_borrar = 0;
+        $borrar = mysqli_prepare($conexion, "DELETE FROM tblcuentas_lector WHERE id_cuenta = ?");
+        mysqli_stmt_bind_param($borrar, "i", $id_borrar);
 
         // Si había una cuenta sin activar, se reemplaza por esta
         if ($cuenta) {
-            $borrar->execute([$cuenta["id_cuenta"]]);
+            $id_borrar = $cuenta["id_cuenta"];
+            mysqli_stmt_execute($borrar);
         }
 
         // Se crea la cuenta (sin activar) con su código de activación de 24 horas
         $token = bin2hex(random_bytes(32));
-        $consulta = $pdo->prepare(
+        $matricula = $persona["matricula"];
+        $numero_control = $persona["numero_control"];
+        $contrasenia = password_hash($password, PASSWORD_DEFAULT);
+        $respuesta_guardada = password_hash($respuesta, PASSWORD_DEFAULT);
+        $vence = date("Y-m-d H:i:s", time() + 86400);
+        $creada = date("Y-m-d H:i:s");
+
+        $consulta = mysqli_prepare(
+            $conexion,
             "INSERT INTO tblcuentas_lector (matricula, numero_control, contrasenia, id_pregunta, respuesta_seguridad, activa, token_activacion, vence_activacion, fecha_creacion)
              VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)"
         );
-        $consulta->execute([
-            $persona["matricula"],
-            $persona["numero_control"],
-            password_hash($password, PASSWORD_DEFAULT),
-            $id_pregunta,
-            password_hash($respuesta, PASSWORD_DEFAULT),
-            $token,
-            date("Y-m-d H:i:s", time() + 86400),
-            date("Y-m-d H:i:s"),
-        ]);
-        $id_cuenta = $pdo->lastInsertId();
+        mysqli_stmt_bind_param($consulta, "sssissss", $matricula, $numero_control, $contrasenia, $id_pregunta, $respuesta_guardada, $token, $vence, $creada);
+        mysqli_stmt_execute($consulta);
+        $id_cuenta = mysqli_insert_id($conexion);
 
         if (enviar_activacion($persona["email"], $persona["nombre"], $token)) {
             $_SESSION["correo_enviado"] = ocultar_correo($persona["email"]);
@@ -81,7 +88,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         }
 
         // Si el correo no salió, se borra la cuenta para que pueda intentar de nuevo
-        $borrar->execute([$id_cuenta]);
+        $id_borrar = $id_cuenta;
+        mysqli_stmt_execute($borrar);
         $error = "No pudimos enviar el correo de activación. Intenta de nuevo más tarde.";
     }
 }

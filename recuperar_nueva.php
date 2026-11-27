@@ -1,12 +1,27 @@
 <?php
 // Paso 3 de 4: el usuario escribe su nueva contraseña.
 session_start();
+require "config/conexion.php";
 
 // Solo entra quien respondió bien la pregunta
 if (!isset($_SESSION["recuperar_ok"])) {
     header("Location: recuperar_password.php");
     exit();
 }
+
+// Se busca el nombre de la cuenta que se está recuperando
+$id_cuenta = $_SESSION["recuperar_ok"];
+$consulta = mysqli_prepare(
+    $conexion,
+    "SELECT COALESCE(a.nombre, t.nombre) AS nombre
+     FROM tblcuentas_lector c
+     LEFT JOIN tblalumnos a ON a.matricula = c.matricula
+     LEFT JOIN tbltrabajadores t ON t.numero_control = c.numero_control
+     WHERE c.id_cuenta = ?"
+);
+mysqli_stmt_bind_param($consulta, "i", $id_cuenta);
+mysqli_stmt_execute($consulta);
+$cuenta = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
 // Si recuperar_listo.php encontró un error, aquí se recupera el mensaje y se borra para que salga una sola vez
 $error = $_SESSION["recuperar_error"] ?? "";
@@ -200,6 +215,8 @@ unset($_SESSION["recuperar_error"]);
 
                         <h2 class="login-title">Nueva contraseña</h2>
                         <p class="login-subtitle">Tu respuesta fue correcta. Elige una contraseña que no hayas usado antes.</p>
+
+                        <p class="fw-semibold mb-3">Cuenta de: <?= htmlspecialchars($cuenta["nombre"]) ?></p>
 
                         <!-- Mensaje de error -->
                         <?php if ($error !== ""): ?>

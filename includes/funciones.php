@@ -6,7 +6,6 @@ function normalizar_respuesta($texto)
     return strtr($texto, ["á" => "a", "é" => "e", "í" => "i", "ó" => "o", "ú" => "u", "ü" => "u", "ñ" => "n"]);
 }
 
-// juan.perez@gmail.com -> ju****@gmail.com
 function ocultar_correo($correo)
 {
     $partes = explode("@", $correo);
@@ -17,10 +16,13 @@ function ocultar_correo($correo)
 }
 
 // Cuántas veces falló la respuesta de seguridad en los últimos 15 minutos
-function intentos_recuperacion($pdo, $clave)
+function intentos_recuperacion($conexion, $clave)
 {
     $desde = date("Y-m-d H:i:s", time() - 900);
-    $consulta = $pdo->prepare("SELECT COUNT(*) FROM tblintentos_acceso WHERE clave_acceso = ? AND exitoso = 0 AND fecha_intento >= ?");
-    $consulta->execute(["rec_" . $clave, $desde]);
-    return (int) $consulta->fetchColumn();
+    $clave_intento = "rec_" . $clave;
+    $consulta = mysqli_prepare($conexion, "SELECT COUNT(*) FROM tblintentos_acceso WHERE clave_acceso = ? AND exitoso = 0 AND fecha_intento >= ?");
+    mysqli_stmt_bind_param($consulta, "ss", $clave_intento, $desde);
+    mysqli_stmt_execute($consulta);
+    $fila = mysqli_fetch_row(mysqli_stmt_get_result($consulta));
+    return (int) $fila[0];
 }

@@ -10,7 +10,7 @@
     require "config/conexion.php";
 
     // Trae 12 libros publicados y activos para el mini catálogo
-    $consulta = $pdo->prepare("
+    $resultado = mysqli_query($conexion, "
         SELECT p.id_libro, p.portada, l.titulo_libro, c.nombre AS categoria
         FROM tblpublicacion_catalogo p
         INNER JOIN tbllibros l ON l.id_libro = p.id_libro
@@ -19,8 +19,7 @@
         ORDER BY p.fecha_publicacion DESC
         LIMIT 12
     ");
-    $consulta->execute();
-    $books = $consulta->fetchAll(PDO::FETCH_ASSOC);
+    $books = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
 ?>
 <!doctype html>
 <html lang="es">

@@ -15,9 +15,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $clave = trim($_POST["matricula"]);
 
     // Se busca la cuenta por matrícula (alumno) o por número de control (trabajador)
-    $consulta = $pdo->prepare("SELECT id_cuenta, id_pregunta, activa FROM tblcuentas_lector WHERE matricula = ? OR numero_control = ?");
-    $consulta->execute([$clave, $clave]);
-    $cuenta = $consulta->fetch();
+    $consulta = mysqli_prepare($conexion, "SELECT id_cuenta, id_pregunta, activa FROM tblcuentas_lector WHERE matricula = ? OR numero_control = ?");
+    mysqli_stmt_bind_param($consulta, "ss", $clave, $clave);
+    mysqli_stmt_execute($consulta);
+    $cuenta = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
     // La clave debe ser solo números, y la cuenta debe existir y estar activada
     if (!ctype_digit($clave) || !$cuenta || $cuenta["activa"] != 1) {
@@ -25,7 +26,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } elseif (!$cuenta["id_pregunta"]) {
         // Las cuentas antiguas no tienen pregunta de seguridad, así que no pueden recuperarla aquí
         $error = "Tu cuenta no tiene pregunta de seguridad. Acércate a la biblioteca.";
-    } elseif (intentos_recuperacion($pdo, $clave) >= 3) {
+    } elseif (intentos_recuperacion($conexion, $clave) >= 3) {
         // Si ya falló 3 veces en los últimos 15 minutos, se manda a la pantalla de bloqueo
         header("Location: recuperar_bloqueado.php");
         exit();

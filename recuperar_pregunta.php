@@ -16,20 +16,25 @@ $id_cuenta = $_SESSION["recuperar_cuenta"];
 $clave = $_SESSION["recuperar_clave"];
 
 // Si ya está bloqueado (3 fallos en 15 minutos), no puede volver a intentar
-if (intentos_recuperacion($pdo, $clave) >= 3) {
+if (intentos_recuperacion($conexion, $clave) >= 3) {
     header("Location: recuperar_bloqueado.php");
     exit();
 }
 
-// Se busca la pregunta que eligió al crear su cuenta y la respuesta guardada
-$consulta = $pdo->prepare(
-    "SELECT c.respuesta_seguridad, p.pregunta
+// Se busca la pregunta que eligió al crear su cuenta, la respuesta guardada y su nombre
+$consulta = mysqli_prepare(
+    $conexion,
+    "SELECT c.respuesta_seguridad, p.pregunta,
+            COALESCE(a.nombre, t.nombre) AS nombre
      FROM tblcuentas_lector c
      JOIN tblpreguntas_seguridad p ON p.id_pregunta = c.id_pregunta
+     LEFT JOIN tblalumnos a ON a.matricula = c.matricula
+     LEFT JOIN tbltrabajadores t ON t.numero_control = c.numero_control
      WHERE c.id_cuenta = ?"
 );
-$consulta->execute([$id_cuenta]);
-$cuenta = $consulta->fetch();
+mysqli_stmt_bind_param($consulta, "i", $id_cuenta);
+mysqli_stmt_execute($consulta);
+$cuenta = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
 // Esto corre solo cuando el usuario envía su respuesta
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
@@ -39,8 +44,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $correcta = password_verify($respuesta, $cuenta["respuesta_seguridad"]);
 
     // Se guarda el intento
-    $consulta = $pdo->prepare("INSERT INTO tblintentos_acceso (clave_acceso, exitoso, fecha_intento) VALUES (?, ?, ?)");
-    $consulta->execute(["rec_" . $clave, $correcta ? 1 : 0, date("Y-m-d H:i:s")]);
+    $clave_intento = "rec_" . $clave;
+    $exitoso = $correcta ? 1 : 0;
+    $ahora = date("Y-m-d H:i:s");
+    $consulta = mysqli_prepare($conexion, "INSERT INTO tblintentos_acceso (clave_acceso, exitoso, fecha_intento) VALUES (?, ?, ?)");
+    mysqli_stmt_bind_param($consulta, "sis", $clave_intento, $exitoso, $ahora);
+    mysqli_stmt_execute($consulta);
 
     // Respuesta correcta: se permite pasar a escribir la nueva contraseña
     if ($correcta) {
@@ -50,7 +59,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     }
 
     // Respuesta incorrecta: si ya son 3 fallos se bloquea; si no, se avisa cuántos intentos quedan
-    if (intentos_recuperacion($pdo, $clave) >= 3) {
+    if (intentos_recuperacion($conexion, $clave) >= 3) {
         header("Location: recuperar_bloqueado.php");
     } else {
         header("Location: recuperar_incorrecta.php");
@@ -250,6 +259,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                         <h2 class="login-title">Pregunta de seguridad</h2>
                         <p class="login-subtitle">Responde la pregunta que elegiste al crear tu cuenta para poder cambiar tu contraseña.</p>
+
+                        <p class="fw-semibold mb-3">Cuenta de: <?= htmlspecialchars($cuenta["nombre"]) ?></p>
 
                         <div class="question-box">
                             <p class="label">Tu pregunta</p>

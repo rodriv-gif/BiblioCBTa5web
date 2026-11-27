@@ -7,13 +7,17 @@ $activada = false;
 $token = $_GET["token"] ?? "";
 
 if ($token !== "") {
-    $consulta = $pdo->prepare("SELECT id_cuenta FROM tblcuentas_lector WHERE token_activacion = ? AND activa = 0 AND vence_activacion >= ?");
-    $consulta->execute([$token, date("Y-m-d H:i:s")]);
-    $cuenta = $consulta->fetch();
+    $ahora = date("Y-m-d H:i:s");
+    $consulta = mysqli_prepare($conexion, "SELECT id_cuenta FROM tblcuentas_lector WHERE token_activacion = ? AND activa = 0 AND vence_activacion >= ?");
+    mysqli_stmt_bind_param($consulta, "ss", $token, $ahora);
+    mysqli_stmt_execute($consulta);
+    $cuenta = mysqli_fetch_assoc(mysqli_stmt_get_result($consulta));
 
     if ($cuenta) {
-        $consulta = $pdo->prepare("UPDATE tblcuentas_lector SET activa = 1, token_activacion = NULL, vence_activacion = NULL WHERE id_cuenta = ?");
-        $consulta->execute([$cuenta["id_cuenta"]]);
+        $id_cuenta = $cuenta["id_cuenta"];
+        $consulta = mysqli_prepare($conexion, "UPDATE tblcuentas_lector SET activa = 1, token_activacion = NULL, vence_activacion = NULL WHERE id_cuenta = ?");
+        mysqli_stmt_bind_param($consulta, "i", $id_cuenta);
+        mysqli_stmt_execute($consulta);
         $activada = true;
     }
 }
