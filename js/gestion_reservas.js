@@ -41,3 +41,55 @@ function actualizarFechaCalculada() {
 if (selectTipo) {
     selectTipo.addEventListener('change', actualizarFechaCalculada);
 }
+
+// Muestra sugerencias en vivo al escribir nombre o matrícula en la consulta de préstamos por periodo
+const buscadorLector = document.getElementById('buscadorLector');
+const codigoLectorOculto = document.getElementById('codigoLectorOculto');
+const sugerenciasLector = document.getElementById('sugerenciasLector');
+const formConsultaPeriodo = document.getElementById('formConsultaPeriodo');
+let temporizadorLector = null;
+
+if (buscadorLector && sugerenciasLector && codigoLectorOculto) {
+    buscadorLector.addEventListener('input', function () {
+        const texto = buscadorLector.value.trim();
+        codigoLectorOculto.value = '';
+        clearTimeout(temporizadorLector);
+
+        if (texto === '') {
+            sugerenciasLector.innerHTML = '';
+            sugerenciasLector.classList.add('d-none');
+            return;
+        }
+
+        temporizadorLector = setTimeout(function () {
+            fetch('gestion_reservas.php?ajax_lectores=1&term=' + encodeURIComponent(texto))
+                .then(function (respuesta) {
+                    return respuesta.text();
+                })
+                .then(function (html) {
+                    sugerenciasLector.innerHTML = html;
+                    sugerenciasLector.classList.remove('d-none');
+                });
+        }, 200);
+    });
+
+    sugerenciasLector.addEventListener('click', function (e) {
+        const opcion = e.target.closest('.reader-suggestion-item');
+        if (!opcion) {
+            return;
+        }
+        codigoLectorOculto.value = opcion.getAttribute('data-codigo');
+        buscadorLector.value = opcion.getAttribute('data-etiqueta');
+        sugerenciasLector.classList.add('d-none');
+
+        if (formConsultaPeriodo) {
+            formConsultaPeriodo.submit();
+        }
+    });
+
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('.reader-search-wrap')) {
+            sugerenciasLector.classList.add('d-none');
+        }
+    });
+}

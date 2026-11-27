@@ -1,27 +1,9 @@
-/* Estilos propios de la pantalla Detalle del libro */
-.book-hero {
-    position: relative;
-    background-color: var(--green-dark);
-    color: #ffffff;
-    padding: 20px 0 110px 0;
-    overflow: hidden;
-}
-
-.book-hero::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 70px;
-    background: url("../img/estante.svg") center / 100% 100% no-repeat;
-}
-
+/* Estilos minimalistas para la pantalla Detalle del libro */
 .back-link {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    color: #ffffff;
+    color: var(--green-main);
     font-size: 14px;
     font-weight: 500;
     text-decoration: none;
@@ -29,69 +11,47 @@
 
 .back-link:hover {
     text-decoration: underline;
-    color: #ffffff;
+    color: var(--green-dark);
 }
 
-.btn-header {
-    font-size: 14px;
-    font-weight: 500;
-    border-radius: 8px;
-    min-height: 40px;
-    padding: 6px 16px;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background-color: transparent;
-    color: #ffffff;
-    border: 1.5px solid #ffffff;
-}
-
-.btn-header:hover {
-    background-color: rgba(255, 255, 255, 0.12);
-    color: #ffffff;
+.book-detail-card {
+    background-color: #ffffff;
+    border: 1px solid var(--border-card);
+    border-radius: 14px;
+    padding: 28px;
+    box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
 }
 
 .book-cover {
-    position: relative;
-    width: 200px;
-    height: 300px;
-    border-radius: 4px 8px 8px 4px;
+    width: 190px;
+    height: 270px;
+    border-radius: 8px;
     background-color: var(--green-main);
-    box-shadow: 8px 8px 24px rgba(0, 0, 0, 0.35);
-    padding: 24px 20px 20px 36px;
+    color: #ffffff;
+    padding: 20px;
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
-}
-
-.book-cover::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 16px;
-    background-color: var(--green-dark);
-    border-radius: 4px 0 0 4px;
-    opacity: 0.55;
+    box-shadow: 0 4px 14px rgba(16, 24, 40, 0.12);
 }
 
 .book-cover .cover-top {
     font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
+    opacity: 0.85;
 }
 
 .book-cover .cover-title {
-    font-size: 20px;
+    font-size: 17px;
     font-weight: 600;
-    line-height: 1.25;
+    line-height: 1.3;
     margin-top: auto;
 }
 
 .book-cover .cover-line {
-    width: 40px;
+    width: 36px;
     height: 3px;
     background-color: #b0a06e;
     margin: 12px 0 auto 0;
@@ -99,23 +59,17 @@
 
 .book-cover .cover-author {
     font-size: 12px;
+    opacity: 0.9;
     margin-top: auto;
 }
 
-.book-cover img {
-    position: absolute;
-    right: 14px;
-    bottom: 14px;
-    height: 36px;
-    width: auto;
-}
-
 .book-cover-photo {
-    width: 200px;
-    height: 300px;
+    width: 190px;
+    height: 270px;
     object-fit: cover;
-    border-radius: 4px 8px 8px 4px;
-    box-shadow: 8px 8px 24px rgba(0, 0, 0, 0.35);
+    border-radius: 8px;
+    border: 1px solid var(--border-card);
+    box-shadow: 0 4px 14px rgba(16, 24, 40, 0.1);
     display: block;
 }
 
@@ -129,26 +83,61 @@
     font-weight: 500;
 }
 
-.book-hero h1 {
-    font-size: 36px;
+.detail-title {
+    font-size: 28px;
     font-weight: 700;
-    line-height: 1.2;
-    margin: 14px 0 4px 0;
+    color: var(--text-main);
+    line-height: 1.25;
+    margin: 6px 0 4px 0;
 }
 
-.book-hero .author {
-    font-size: 18px;
-    margin: 0 0 20px 0;
+.detail-author {
+    font-size: 16px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.detail-divider {
+    border-top: 1px solid var(--border-card);
+    margin: 20px 0;
+}
+
+.detail-synopsis {
+    color: var(--text-main);
+    line-height: 1.65;
+}
+
+.app-notice {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background-color: var(--gray-light);
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.app-notice .icon {
+    color: var(--green-main);
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
 }
 
 .status-tag {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 14px;
+    padding: 4px 12px;
     border-radius: 999px;
     font-size: 13px;
     font-weight: 500;
+}
+
+.status-tag .icon {
+    width: 15px;
+    height: 15px;
 }
 
 .status-available {
@@ -162,10 +151,10 @@
 }
 
 .section-heading {
-    font-size: 22px;
-    border-left: 4px solid var(--green-main);
-    padding-left: 12px;
-    margin: 0 0 16px 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--green-main);
+    margin: 0 0 8px 0;
 }
 
 .info-card {
@@ -177,7 +166,9 @@
 }
 
 .info-card h2 {
-    font-size: 18px;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--green-main);
     margin: 0 0 16px 0;
 }
 
@@ -198,4 +189,5 @@
 .info-list .icon {
     color: var(--green-main);
     margin-top: 2px;
+    flex-shrink: 0;
 }
