@@ -1,8 +1,478 @@
 <?php
-require "includes/sesion.php";
+
+require_once __DIR__ . "/includes/sesion.php";
 exigir_bibliotecario();
-require "config/conexion.php";
+require_once __DIR__ . "/config/conexion.php";
+
+/** @var mysqli $conexion */
+
+if (!isset($conexion) || !($conexion instanceof mysqli)) {
+    die("No se pudo establecer la conexión con la base de datos.");
+}
+
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
 $pagina_activa = "datos_biblioteca_preguntas.php";
+
+$mensaje = $_SESSION["mensaje_preguntas"] ?? "";
+unset($_SESSION["mensaje_preguntas"]);
+
+$error = "";
+$preguntasFaq = [];
+$ultimaActualizacion = "Sin registro";
+$revision = "";
+$cargaCorrecta = false;
+$transaccion = false;
+
+$id_bibliotecario = (int) ($_SESSION["id_bibliotecario"] ?? 0);
+
+// Token de seguridad
+if (empty($_SESSION["csrf_preguntas"])) {
+    $_SESSION["csrf_preguntas"] = bin2hex(random_bytes(32));
+}
+
+try {
+
+    // Verificar las columnas de la tabla
+    $columnas = mysqli_query(
+        $conexion,
+        "SHOW COLUMNS FROM tblpreguntas_frecuentes"
+    );
+
+    $tieneBibliotecario = false;
+
+    while ($columna = mysqli_fetch_assoc($columnas)) {
+
+        if ($columna["Field"] === "id_bibliotecario") {
+            $tieneBibliotecario = true;
+        }
+
+    }
+
+    mysqli_free_result($columnas);
+
+    // Consulta de preguntas frecuentes
+    $sql = "SELECT
+                id_pregunta_frecuente,
+                pregunta,
+                respuesta,
+                orden,
+                actualizado_en";
+
+    if ($tieneBibliotecario) {
+        $sql .= ", id_bibliotecario";
+    }
+
+    $sql .= " FROM tblpreguntas_frecuentes
+              ORDER BY orden, id_pregunta_frecuente";
+
+    // Guardar cambios
+    if ($_SERVER["REQUEST_METHOD"] === "POST") {
+
+        $token = $_POST["csrf"] ?? "";
+        $ids = $_POST["pregunta_id"] ?? [];
+        $titulos = $_POST["pregunta_titulo"] ?? [];
+        $respuestas = $_POST["pregunta_contenido"] ?? [];
+
+        // Validar formulario
+        if (
+            !is_string($token) ||
+            !hash_equals($_SESSION["csrf_preguntas"], $token) ||
+            $id_bibliotecario <= 0
+        ) {
+
+            $error = "El formulario o la sesión no son válidos.";
+
+        } elseif (
+            !is_array($ids) ||
+            !is_array($titulos) ||
+            !is_array($respuestas) ||
+            count($ids) !== count($titulos) ||
+            count($ids) !== count($respuestas) ||
+            count($ids) < 1 ||
+            count($ids) > 30
+        ) {
+
+            $error = "Debes guardar entre 1 y 30 preguntas completas.";
+
+        } else {
+
+            $ids = array_values($ids);
+            $titulos = array_values($titulos);
+            $respuestas = array_values($respuestas);
+
+            foreach ($ids as $i => $id) {
+
+                if (
+                    !is_string($id) ||
+                    !ctype_digit($id) ||
+                    !is_string($titulos[$i]) ||
+                    !is_string($respuestas[$i])
+                ) {
+                    $error = "Los datos del formulario no son válidos.";
+                    break;
+                }
+
+                $titulos[$i] = trim($titulos[$i]);
+                $respuestas[$i] = trim($respuestas[$i]);
+
+                if (
+                    $titulos[$i] === "" ||
+                    $respuestas[$i] === ""
+                ) {
+                    $error = "Cada pregunta debe tener su respuesta.";
+                    break;
+                }
+
+                if (
+                    mb_strlen($titulos[$i], "UTF-8") > 200 ||
+                    mb_strlen($respuestas[$i], "UTF-8") > 2000
+                ) {
+                    $error = "Se superó la longitud permitida.";
+                    break;
+                }
+
+            }
+
+        }
+
+        // Procesar modificaciones
+        if ($error === "") {
+
+            mysqli_begin_transaction($conexion);
+
+            $transaccion = true;
+
+            // Consultar los registros existentes
+            $resultado = mysqli_query(
+                $conexion,
+                $sql . " FOR UPDATE"
+            );
+
+            $anteriores = mysqli_fetch_all(
+                $resultado,
+                MYSQLI_ASSOC
+            );
+
+            mysqli_free_result($resultado);
+
+            // Verificar que la lista no haya cambiado
+            $revisionRecibida = $_POST["revision"] ?? "";
+
+            if (
+                !is_string($revisionRecibida) ||
+                !hash_equals(
+                    hash("sha256", serialize($anteriores)),
+                    $revisionRecibida
+                )
+            ) {
+                throw new RuntimeException(
+                    "La lista cambió. Recarga la página antes de guardar."
+                );
+            }
+
+            $existentes = array_column(
+                $anteriores,
+                null,
+                "id_pregunta_frecuente"
+            );
+
+            $conservar = [];
+
+            foreach ($ids as $id) {
+
+                $id = (int) $id;
+
+                if ($id > 0) {
+
+                    if (
+                        !isset($existentes[$id]) ||
+                        isset($conservar[$id])
+                    ) {
+                        throw new RuntimeException(
+                            "Identificador de pregunta no válido."
+                        );
+                    }
+
+                    $conservar[$id] = true;
+
+                }
+
+            }
+
+            // Eliminar preguntas retiradas del formulario
+            $eliminar = mysqli_prepare(
+                $conexion,
+                "DELETE FROM tblpreguntas_frecuentes
+                 WHERE id_pregunta_frecuente = ?"
+            );
+
+            foreach ($existentes as $id => $registro) {
+
+                if (!isset($conservar[$id])) {
+
+                    mysqli_stmt_bind_param(
+                        $eliminar,
+                        "i",
+                        $id
+                    );
+
+                    mysqli_stmt_execute($eliminar);
+
+                }
+
+            }
+
+            mysqli_stmt_close($eliminar);
+
+            // Preparar consultas de inserción y actualización
+            $sqlInsertar = "INSERT INTO tblpreguntas_frecuentes
+                            (pregunta, respuesta, orden, actualizado_en";
+
+            $sqlActualizar = "UPDATE tblpreguntas_frecuentes SET
+                                pregunta = ?,
+                                respuesta = ?,
+                                orden = ?,
+                                actualizado_en = NOW()";
+
+            if ($tieneBibliotecario) {
+
+                $sqlInsertar .= ", id_bibliotecario)
+                                 VALUES (?, ?, ?, NOW(), ?)";
+
+                $sqlActualizar .= ", id_bibliotecario = ?";
+
+            } else {
+
+                $sqlInsertar .= ") VALUES (?, ?, ?, NOW())";
+
+            }
+
+            $sqlActualizar .= " WHERE id_pregunta_frecuente = ?";
+
+            $insertar = mysqli_prepare(
+                $conexion,
+                $sqlInsertar
+            );
+
+            $actualizar = mysqli_prepare(
+                $conexion,
+                $sqlActualizar
+            );
+
+            // Insertar o actualizar preguntas
+            foreach ($ids as $i => $id) {
+
+                $id = (int) $id;
+                $titulo = $titulos[$i];
+                $respuesta = $respuestas[$i];
+                $orden = $i + 1;
+
+                if ($id === 0) {
+
+                    // Insertar nueva pregunta
+                    if ($tieneBibliotecario) {
+
+                        mysqli_stmt_bind_param(
+                            $insertar,
+                            "ssii",
+                            $titulo,
+                            $respuesta,
+                            $orden,
+                            $id_bibliotecario
+                        );
+
+                    } else {
+
+                        mysqli_stmt_bind_param(
+                            $insertar,
+                            "ssi",
+                            $titulo,
+                            $respuesta,
+                            $orden
+                        );
+
+                    }
+
+                    mysqli_stmt_execute($insertar);
+
+                } else {
+
+                    // Actualizar pregunta existente
+                    if ($tieneBibliotecario) {
+
+                        mysqli_stmt_bind_param(
+                            $actualizar,
+                            "ssiii",
+                            $titulo,
+                            $respuesta,
+                            $orden,
+                            $id_bibliotecario,
+                            $id
+                        );
+
+                    } else {
+
+                        mysqli_stmt_bind_param(
+                            $actualizar,
+                            "ssii",
+                            $titulo,
+                            $respuesta,
+                            $orden,
+                            $id
+                        );
+
+                    }
+
+                    mysqli_stmt_execute($actualizar);
+
+                }
+
+            }
+
+            mysqli_stmt_close($insertar);
+            mysqli_stmt_close($actualizar);
+
+            mysqli_commit($conexion);
+
+            $transaccion = false;
+
+            $_SESSION["mensaje_preguntas"] =
+                "Las preguntas frecuentes se guardaron correctamente.";
+
+            header("Location: datos_biblioteca_preguntas.php");
+
+            exit;
+
+        }
+
+    }
+
+} catch (Exception $e) {
+
+    if ($transaccion) {
+
+        mysqli_rollback($conexion);
+
+        $transaccion = false;
+
+    }
+
+    error_log("Preguntas: " . $e->getMessage());
+    if ($e instanceof mysqli_sql_exception) {
+
+        $error = "No se pudieron guardar las preguntas frecuentes.";
+
+    } else {
+
+        $error = $e->getMessage();
+
+    }
+
+}
+
+// Consultar las preguntas frecuentes
+try {
+
+    if (!isset($sql)) {
+
+        throw new RuntimeException(
+            "No se pudo consultar la estructura de la tabla."
+        );
+
+    }
+
+    $resultado = mysqli_query($conexion, $sql);
+
+    $preguntasFaq = mysqli_fetch_all(
+        $resultado,
+        MYSQLI_ASSOC
+    );
+
+    mysqli_free_result($resultado);
+
+    $revision = hash(
+        "sha256",
+        serialize($preguntasFaq)
+    );
+
+    $cargaCorrecta = true;
+
+    // Obtener la última actualización
+    $ultima = null;
+
+    foreach ($preguntasFaq as $pregunta) {
+
+        if (
+            !empty($pregunta["actualizado_en"]) &&
+            (
+                $ultima === null ||
+                $pregunta["actualizado_en"] > $ultima["actualizado_en"]
+            )
+        ) {
+
+            $ultima = $pregunta;
+
+        }
+
+    }
+
+    if ($ultima !== null) {
+
+        $ultimaActualizacion = date(
+            "d/m/Y, H:i",
+            strtotime($ultima["actualizado_en"])
+        );
+
+        // Consultar al bibliotecario responsable
+        if (
+            $tieneBibliotecario &&
+            !empty($ultima["id_bibliotecario"])
+        ) {
+
+            $consulta = mysqli_prepare(
+                $conexion,
+                "SELECT usuario
+                 FROM tblbibliotecario
+                 WHERE id_bibliotecario = ?"
+            );
+
+            $responsable = (int) $ultima["id_bibliotecario"];
+
+            mysqli_stmt_bind_param(
+                $consulta,
+                "i",
+                $responsable
+            );
+
+            mysqli_stmt_execute($consulta);
+
+            mysqli_stmt_bind_result(
+                $consulta,
+                $usuario
+            );
+
+            if (mysqli_stmt_fetch($consulta)) {
+
+                $ultimaActualizacion .= " · " . $usuario;
+
+            }
+
+            mysqli_stmt_close($consulta);
+
+        }
+
+    }
+
+} catch (Exception $e) {
+
+    error_log("Preguntas: " . $e->getMessage());
+    $error = "No se pudo consultar la información de preguntas frecuentes.";
+
+    $cargaCorrecta = false;
+
+}
+
 ?>
 <!doctype html>
 <html lang="es">
@@ -19,779 +489,8 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
 
         <link rel="stylesheet" href="./css/bootstrap.min.css" />
         <link rel="stylesheet" href="./css/bibliotecario.css" />
+        <link rel="stylesheet" href="./css/biblioteca_preguntas.css" />
 
-        <style>
-            /* Colores de la guia de estilos */
-            :root {
-                --green-main: #0f5132;
-                --green-medium: #2e7d58;
-                --green-dark: #0a3d26;
-                --green-success: #1f6b47;
-                --green-soft: #e6f4ec;
-                --blue-accent: #1e3a8a;
-                --red-alert: #b42318;
-                --red-soft: #fee4e2;
-                --gray-light: #f5f7f6;
-                --text-main: #212121;
-                --text-muted: #4b5563;
-                --border-card: #e5e7eb;
-                --border-field: #d0d5dd;
-            }
-
-            body {
-                font-family: "Poppins", "Segoe UI", Arial, sans-serif;
-                font-size: 14px;
-                line-height: 1.5;
-                color: var(--text-main);
-                background-color: var(--gray-light);
-            }
-
-            .icon {
-                width: 18px;
-                height: 18px;
-                fill: none;
-                stroke: currentColor;
-                stroke-width: 1.75;
-                stroke-linecap: round;
-                stroke-linejoin: round;
-                flex-shrink: 0;
-            }
-
-            .admin-layout {
-                display: flex;
-                min-height: 100vh;
-            }
-
-            /* ---------- Menu lateral ---------- */
-            .sidebar {
-                width: 220px;
-                flex-shrink: 0;
-                background-color: var(--green-main);
-                color: #ffffff;
-                display: flex;
-                flex-direction: column;
-                position: sticky;
-                top: 0;
-                height: 100vh;
-            }
-
-            .sidebar-brand {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 14px 16px;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-                text-decoration: none;
-                color: #ffffff;
-            }
-            .sidebar-brand img {
-                height: 34px;
-                width: auto;
-            }
-            .sidebar-brand .brand-name {
-                font-weight: 600;
-                font-size: 13px;
-                line-height: 1.2;
-                display: block;
-            }
-            .sidebar-brand .brand-sub {
-                font-size: 10px;
-                line-height: 1.2;
-                display: block;
-            }
-
-            .sidebar-menu {
-                list-style: none;
-                margin: 0;
-                padding: 0;
-            }
-            .sidebar-menu a {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                padding: 9px 18px;
-                color: #ffffff;
-                font-size: 13px;
-                line-height: 1.25;
-                text-decoration: none;
-                border-left: 4px solid transparent;
-            }
-            .sidebar-menu a:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-            .sidebar-menu a.active {
-                background-color: var(--green-medium);
-                border-left-color: #ffffff;
-            }
-            .sidebar-menu a:focus-visible {
-                outline: 3px solid #ffffff;
-                outline-offset: -3px;
-            }
-
-            .sidebar-main {
-                flex-grow: 1;
-            }
-
-            .user-card {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                margin: 0 12px 14px 12px;
-                padding: 10px 12px;
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.18);
-                border-radius: 10px;
-            }
-            .user-avatar {
-                width: 32px;
-                height: 32px;
-                border-radius: 50%;
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .user-name {
-                font-size: 12px;
-                line-height: 1.2;
-                font-weight: 500;
-                display: block;
-            }
-            .user-role {
-                font-size: 11px;
-                line-height: 1.2;
-                display: block;
-                margin-top: 2px;
-            }
-
-            .sidebar-bottom {
-                border-top: 1px solid rgba(255, 255, 255, 0.15);
-                padding-top: 4px;
-                margin-bottom: 8px;
-            }
-
-            /* ---------- Contenido ---------- */
-            .admin-main {
-                flex-grow: 1;
-                min-width: 0;
-                padding: 36px 40px;
-            }
-            .admin-content {
-                max-width: 1080px;
-                margin: 0 auto;
-            }
-
-            .page-title {
-                font-size: 28px;
-                font-weight: 600;
-                color: var(--green-main);
-                margin: 0 0 6px 0;
-            }
-            .page-subtitle {
-                color: var(--text-muted);
-                font-size: 14px;
-                margin: 0 0 22px 0;
-            }
-
-            .form-layout {
-                display: grid;
-                grid-template-columns: 1fr 390px;
-                gap: 20px;
-                align-items: start;
-            }
-            .form-column {
-                display: flex;
-                flex-direction: column;
-                gap: 20px;
-            }
-
-            /* tarjetas */
-            .form-card {
-                background-color: #ffffff;
-                border: 1px solid var(--border-card);
-                border-radius: 12px;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-                padding: 22px 24px;
-            }
-
-            .card-header-row {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-bottom: 12px;
-            }
-            .card-header-row.has-subtitle {
-                align-items: flex-start;
-            }
-            .card-icon {
-                width: 30px;
-                height: 30px;
-                border-radius: 50%;
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .card-icon .icon {
-                width: 16px;
-                height: 16px;
-            }
-            .card-title {
-                font-size: 16px;
-                font-weight: 600;
-                margin: 0;
-                line-height: 1.3;
-            }
-            .card-subtitle {
-                font-size: 13px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-
-            /* campos */
-            .field-label {
-                font-size: 13px;
-                font-weight: 500;
-                margin-bottom: 5px;
-                display: block;
-            }
-            .field-label .optional {
-                font-weight: 400;
-                color: var(--text-muted);
-            }
-
-            .form-control {
-                height: 41px;
-                border: 1px solid var(--border-field);
-                border-radius: 8px;
-                font-size: 14px;
-                padding: 0 13px;
-                color: var(--text-main);
-            }
-            textarea.form-control {
-                height: auto;
-                min-height: 80px;
-                padding: 9px 13px;
-                resize: vertical;
-            }
-            .form-control::placeholder {
-                color: #6b7280;
-            }
-            .form-control:focus {
-                border: 2px solid var(--blue-accent);
-                box-shadow: none;
-                padding-left: 11px;
-            }
-            textarea.form-control:focus {
-                padding: 7px 11px;
-            }
-
-            .field-block {
-                margin-bottom: 12px;
-            }
-            .field-block:last-child {
-                margin-bottom: 0;
-            }
-
-            .group-label {
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                color: var(--green-main);
-                margin: 0 0 8px 0;
-            }
-
-            /* interruptor de fin de semana */
-            .toggle-row {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                height: 41px;
-                padding: 0 13px;
-                border: 1px solid var(--border-field);
-                border-radius: 8px;
-                font-size: 14px;
-            }
-            .switch {
-                position: relative;
-                width: 38px;
-                height: 21px;
-                flex-shrink: 0;
-            }
-            .switch input {
-                opacity: 0;
-                width: 100%;
-                height: 100%;
-                position: absolute;
-                inset: 0;
-                margin: 0;
-                cursor: pointer;
-                z-index: 1;
-            }
-            .switch-track {
-                position: absolute;
-                inset: 0;
-                border-radius: 999px;
-                background-color: #d0d5dd;
-                transition: background-color 0.15s;
-            }
-            .switch-track::after {
-                content: "";
-                position: absolute;
-                top: 3px;
-                left: 3px;
-                width: 15px;
-                height: 15px;
-                border-radius: 50%;
-                background-color: #ffffff;
-                transition: transform 0.15s;
-            }
-            .switch input:checked + .switch-track {
-                background-color: var(--green-main);
-            }
-            .switch input:checked + .switch-track::after {
-                transform: translateX(17px);
-            }
-            .switch input:focus-visible + .switch-track {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-
-            .help-text {
-                display: flex;
-                align-items: flex-start;
-                gap: 8px;
-                color: var(--text-muted);
-                font-size: 12px;
-                margin: 10px 0 0 0;
-                line-height: 1.45;
-            }
-            .help-text .icon {
-                width: 13px;
-                height: 13px;
-                margin-top: 2px;
-            }
-
-            /* ultima actualizacion */
-            .update-box {
-                background-color: var(--green-soft);
-                border: 1px solid #bfd9cb;
-                border-radius: 12px;
-                padding: 16px 20px;
-            }
-            .update-box .label {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-            .update-box .value {
-                font-size: 14px;
-                font-weight: 500;
-                margin: 4px 0;
-            }
-            .update-box .note {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-
-            /* mensajes */
-            .message-box {
-                display: flex;
-                align-items: flex-start;
-                gap: 10px;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 13px;
-                margin-bottom: 16px;
-            }
-            .message-error {
-                background-color: var(--red-soft);
-                color: var(--red-alert);
-            }
-            .message-success {
-                background-color: var(--green-soft);
-                color: var(--green-success);
-            }
-            .message-box ul {
-                margin: 0;
-                padding-left: 18px;
-            }
-
-            /* botones */
-            .actions-row {
-                display: flex;
-                justify-content: flex-end;
-                gap: 10px;
-                margin-top: 20px;
-            }
-            .btn-primary-brand,
-            .btn-secondary-brand {
-                font-size: 14px;
-                font-weight: 500;
-                border-radius: 8px;
-                min-height: 42px;
-                padding: 6px 20px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
-            }
-            .btn-primary-brand {
-                background-color: var(--green-main);
-                color: #ffffff;
-                border: 1.5px solid var(--green-main);
-            }
-            .btn-primary-brand:hover {
-                background-color: var(--green-medium);
-                border-color: var(--green-medium);
-                color: #ffffff;
-            }
-            .btn-primary-brand:active {
-                background-color: var(--green-dark) !important;
-                color: #ffffff;
-            }
-            .btn-secondary-brand {
-                background-color: #ffffff;
-                color: var(--green-main);
-                border: 1.5px solid var(--green-main);
-            }
-            .btn-secondary-brand:hover {
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                border-color: var(--green-main);
-            }
-            .btn-primary-brand:focus-visible,
-            .btn-secondary-brand:focus-visible {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-
-            /* imagenes (logo e imagen principal) */
-            .upload-row {
-                display: flex;
-                gap: 16px;
-            }
-            .upload-logo {
-                width: 150px;
-                flex-shrink: 0;
-            }
-            .upload-main {
-                flex-grow: 1;
-                min-width: 0;
-            }
-            .upload-preview {
-                height: 120px;
-                border: 1.5px dashed #d0d5dd;
-                border-radius: 8px;
-                background-color: var(--gray-light);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                overflow: hidden;
-            }
-            .upload-preview.on-white {
-                background-color: #ffffff;
-            }
-            .upload-preview img {
-                max-height: 90px;
-                width: auto;
-            }
-            .upload-preview.cover img {
-                max-height: none;
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            }
-            .btn-upload {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                min-height: 34px;
-                margin-top: 10px;
-                padding: 0 12px;
-                border: 1.5px solid var(--green-main);
-                border-radius: 8px;
-                background-color: #ffffff;
-                color: var(--green-main);
-                font-size: 13px;
-                font-weight: 600;
-                cursor: pointer;
-            }
-            .btn-upload:hover {
-                background-color: var(--green-soft);
-            }
-            .btn-upload .icon {
-                width: 15px;
-                height: 15px;
-            }
-            .upload-input {
-                position: absolute;
-                width: 1px;
-                height: 1px;
-                opacity: 0;
-            }
-            .upload-input:focus-visible + .btn-upload {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-            .file-name {
-                display: block;
-                font-size: 12px;
-                color: var(--text-muted);
-                margin-top: 6px;
-            }
-
-            /* listas que se pueden agregar y quitar */
-            .repeat-row {
-                border-top: 1px solid #e5e7eb;
-                margin-top: 14px;
-                padding-top: 12px;
-            }
-            .repeat-row:first-child {
-                margin-top: 4px;
-            }
-            .row-head {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                min-height: 26px;
-                margin-bottom: 8px;
-            }
-            .row-label {
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                color: var(--green-main);
-            }
-            .btn-delete {
-                width: 30px;
-                height: 30px;
-                border: none;
-                border-radius: 8px;
-                background-color: #fff5f4;
-                color: var(--red-alert);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .btn-delete:hover {
-                background-color: var(--red-soft);
-            }
-            .btn-delete:focus-visible {
-                outline: 3px solid var(--blue-accent);
-            }
-            .btn-add {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                min-height: 36px;
-                margin-top: 14px;
-                padding: 0 14px;
-                border: 1.5px dashed var(--green-medium);
-                border-radius: 8px;
-                background-color: #f5f7f6;
-                color: var(--green-main);
-                font-size: 13px;
-                font-weight: 600;
-            }
-            .btn-add:hover {
-                background-color: var(--green-soft);
-            }
-            .btn-add:focus-visible {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-            .btn-add .icon {
-                width: 15px;
-                height: 15px;
-            }
-            .field-note {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 6px 0 0 0;
-            }
-
-            /* ---------- Submodulos del menu lateral ---------- */
-            .sidebar-menu a.parent-active {
-                border-left-color: #ffffff;
-                font-weight: 600;
-            }
-            .sidebar-menu a .chevron {
-                margin-left: auto;
-                width: 16px;
-                height: 16px;
-            }
-            .submenu {
-                list-style: none;
-                margin: 0;
-                padding: 2px 0 8px 0;
-                background-color: rgba(0, 0, 0, 0.14);
-            }
-            .submenu a {
-                padding: 7px 18px 7px 46px;
-                font-size: 12.5px;
-            }
-            .submenu a.active {
-                background-color: var(--green-medium);
-                border-left-color: #ffffff;
-                font-weight: 500;
-            }
-
-            /* ---------- Encabezado de la pagina ---------- */
-            .breadcrumb-line {
-                font-size: 13px;
-                color: var(--text-muted);
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                margin-bottom: 8px;
-                flex-wrap: wrap;
-            }
-            .breadcrumb-line a {
-                color: var(--blue-accent);
-                text-decoration: none;
-            }
-            .breadcrumb-line a:hover {
-                text-decoration: underline;
-            }
-            .breadcrumb-line .icon {
-                width: 13px;
-                height: 13px;
-            }
-
-            /* tarjeta de ayuda (columna derecha) */
-            .help-list {
-                list-style: none;
-                margin: 0;
-                padding: 0;
-            }
-            .help-list li {
-                display: flex;
-                gap: 10px;
-                font-size: 13px;
-                color: var(--text-main);
-                margin-bottom: 12px;
-                line-height: 1.45;
-            }
-            .help-list li:last-child {
-                margin-bottom: 0;
-            }
-            .help-list .icon {
-                color: var(--green-main);
-                margin-top: 2px;
-                width: 16px;
-                height: 16px;
-            }
-
-            /* imagenes apiladas dentro de la columna derecha */
-            .upload-row.stacked {
-                flex-direction: column;
-                gap: 20px;
-            }
-            .upload-row.stacked .upload-logo {
-                width: 100%;
-            }
-            .upload-row.stacked .upload-preview {
-                height: 130px;
-            }
-
-            /* la columna verde del menu llega hasta abajo aunque la pagina sea larga */
-            .admin-layout {
-                background: linear-gradient(to right, var(--green-main) 220px, transparent 220px);
-            }
-            @media (max-width: 991.98px) {
-                .admin-layout {
-                    background: none;
-                }
-            }
-            .form-layout.equal {
-                grid-template-columns: 1fr 1fr;
-            }
-            @media (max-width: 991.98px) {
-                .form-layout.equal {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            /* pantallas medianas y chicas: el menu pasa arriba */
-            @media (max-width: 991.98px) {
-                .admin-layout {
-                    flex-direction: column;
-                }
-                .sidebar {
-                    width: 100%;
-                    height: auto;
-                    position: static;
-                }
-                .admin-main {
-                    padding: 28px 20px;
-                }
-                .form-layout {
-                    grid-template-columns: 1fr;
-                }
-            }
-        </style>
-        <style data-ajuste="2">
-            .admin-layout {
-                background: linear-gradient(to right, var(--green-main) 200px, transparent 200px);
-            }
-            .sidebar {
-                width: 200px;
-            }
-            .sidebar-brand img {
-                height: 38px;
-            }
-            .sidebar-menu a {
-                padding: 8px 16px;
-                font-size: 12.5px;
-            }
-            .admin-main {
-                padding: 28px 32px;
-            }
-            .admin-content {
-                max-width: 1360px;
-            }
-            .table-lib thead th,
-            .table-lib td {
-                padding: 10px 12px;
-                font-size: 13px;
-            }
-            .page-title {
-                font-size: 24px;
-            }
-            .page-subtitle {
-                font-size: 13px;
-            }
-            .panel-head {
-                padding: 16px 20px;
-            }
-            .panel-head h2 {
-                font-size: 20px;
-            }
-            .panel-head p {
-                font-size: 13px;
-            }
-            .icon-circle {
-                width: 40px;
-                height: 40px;
-            }
-            .btn-brand,
-            .btn-outline-brand,
-            .btn-brand-outline,
-            .btn-danger-outline {
-                min-height: 36px;
-                padding: 6px 14px;
-                font-size: 13px;
-            }
-        </style>
     </head>
 
     <body>
@@ -940,7 +639,7 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
 
         <div class="admin-layout">
             <!-- Menu lateral del bibliotecario -->
-            <?php include "includes/sidebar_bibliotecario.php"; ?>
+            <?php include __DIR__ . "/includes/sidebar_bibliotecario.php"; ?>
 
             <!-- Contenido -->
             <main class="admin-main">
@@ -953,9 +652,21 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
                     <h1 class="page-title">Preguntas frecuentes</h1>
                     <p class="page-subtitle">Agrega, edita o elimina las preguntas que se muestran al público.</p>
 
-                    <!-- Mensajes -->
+                    <?php if ($error !== ""): ?>
+                        <div class="alert alert-danger" role="alert"><?= htmlspecialchars($error, ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8") ?></div>
+                    <?php endif; ?>
+                    <?php if ($mensaje !== ""): ?>
+                        <div class="alert alert-success" role="status"><?= htmlspecialchars($mensaje, ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8") ?></div>
+                    <?php endif; ?>
+                    <?php if ($cargaCorrecta && count($preguntasFaq) === 0): ?>
+                        <div class="alert alert-warning" role="alert">
+                            Todavía no hay preguntas frecuentes registradas. Agrega una pregunta para comenzar.
+                        </div>
+                    <?php endif; ?>
 
                     <form action="" method="POST">
+                        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf_preguntas"], ENT_QUOTES, "UTF-8") ?>">
+                        <input type="hidden" name="revision" value="<?= htmlspecialchars($revision, ENT_QUOTES, "UTF-8") ?>">
                         <div class="form-layout">
                             <!-- Columna izquierda -->
                             <div class="form-column">
@@ -971,84 +682,41 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
                                     </div>
 
                                     <div id="lista-pregunta" data-list data-label="Pregunta">
-                                        <div class="repeat-row">
-                                            <div class="row-head">
-                                                <span class="row-label">Pregunta 1</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
-                                                    <svg class="icon"><use href="#i-trash" /></svg>
-                                                </button>
+                                        <?php foreach ($preguntasFaq as $indice => $pregunta): ?>
+                                            <div class="repeat-row">
+                                                <input type="hidden" name="pregunta_id[]" value="<?= (int) $pregunta["id_pregunta_frecuente"] ?>">
+                                                <div class="row-head">
+                                                    <span class="row-label">Pregunta <?= $indice + 1 ?></span>
+                                                    <button type="button" class="btn-delete" aria-label="Eliminar pregunta">
+                                                        <svg class="icon"><use href="#i-trash" /></svg>
+                                                    </button>
+                                                </div>
+                                                <input
+                                                    type="text"
+                                                    name="pregunta_titulo[]"
+                                                    class="form-control mb-2"
+                                                    placeholder="Pregunta frecuente"
+                                                    maxlength="200"
+                                                    value="<?= htmlspecialchars((string) $pregunta["pregunta"], ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8") ?>"
+                                                    required
+                                                />
+                                                <textarea
+                                                    name="pregunta_contenido[]"
+                                                    class="form-control"
+                                                    rows="3"
+                                                    placeholder="Respuesta"
+                                                    maxlength="2000"
+                                                    required
+                                                ><?= htmlspecialchars((string) $pregunta["respuesta"], ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8") ?></textarea>
                                             </div>
-                                            <input
-                                                type="text"
-                                                name="pregunta_titulo[]"
-                                                class="form-control mb-2"
-                                                placeholder="[Pregunta frecuente]"
-                                                value="[Pregunta frecuente]"
-                                            />
-                                            <textarea name="pregunta_contenido[]" class="form-control" rows="3" placeholder="[Respuesta]">
-[Respuesta]</textarea
-                                            >
-                                        </div>
-                                        <div class="repeat-row">
-                                            <div class="row-head">
-                                                <span class="row-label">Pregunta 2</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
-                                                    <svg class="icon"><use href="#i-trash" /></svg>
-                                                </button>
-                                            </div>
-                                            <input
-                                                type="text"
-                                                name="pregunta_titulo[]"
-                                                class="form-control mb-2"
-                                                placeholder="[Pregunta frecuente]"
-                                                value="[Pregunta frecuente]"
-                                            />
-                                            <textarea name="pregunta_contenido[]" class="form-control" rows="3" placeholder="[Respuesta]">
-[Respuesta]</textarea
-                                            >
-                                        </div>
-                                        <div class="repeat-row">
-                                            <div class="row-head">
-                                                <span class="row-label">Pregunta 3</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
-                                                    <svg class="icon"><use href="#i-trash" /></svg>
-                                                </button>
-                                            </div>
-                                            <input
-                                                type="text"
-                                                name="pregunta_titulo[]"
-                                                class="form-control mb-2"
-                                                placeholder="[Pregunta frecuente]"
-                                                value="[Pregunta frecuente]"
-                                            />
-                                            <textarea name="pregunta_contenido[]" class="form-control" rows="3" placeholder="[Respuesta]">
-[Respuesta]</textarea
-                                            >
-                                        </div>
-                                        <div class="repeat-row">
-                                            <div class="row-head">
-                                                <span class="row-label">Pregunta 4</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
-                                                    <svg class="icon"><use href="#i-trash" /></svg>
-                                                </button>
-                                            </div>
-                                            <input
-                                                type="text"
-                                                name="pregunta_titulo[]"
-                                                class="form-control mb-2"
-                                                placeholder="[Pregunta frecuente]"
-                                                value="[Pregunta frecuente]"
-                                            />
-                                            <textarea name="pregunta_contenido[]" class="form-control" rows="3" placeholder="[Respuesta]">
-[Respuesta]</textarea
-                                            >
-                                        </div>
+                                        <?php endforeach; ?>
                                     </div>
                                     <template id="tpl-lista-pregunta">
                                         <div class="repeat-row">
+                                            <input type="hidden" name="pregunta_id[]" value="0">
                                             <div class="row-head">
                                                 <span class="row-label">Pregunta 0</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
+                                                <button type="button" class="btn-delete" aria-label="Eliminar pregunta">
                                                     <svg class="icon"><use href="#i-trash" /></svg>
                                                 </button>
                                             </div>
@@ -1056,19 +724,23 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
                                                 type="text"
                                                 name="pregunta_titulo[]"
                                                 class="form-control mb-2"
-                                                placeholder="[Pregunta frecuente]"
+                                                placeholder="Pregunta frecuente"
+                                                maxlength="200"
                                                 value=""
+                                                required
                                             />
                                             <textarea
                                                 name="pregunta_contenido[]"
                                                 class="form-control"
                                                 rows="3"
-                                                placeholder="[Respuesta]"
+                                                placeholder="Respuesta"
+                                                maxlength="2000"
+                                                required
                                             ></textarea>
                                         </div>
                                     </template>
 
-                                    <button type="button" class="btn-add" data-add="lista-pregunta">
+                                    <button type="button" class="btn-add" data-add="lista-pregunta" <?= !$cargaCorrecta ? "disabled" : "" ?>>
                                         <svg class="icon"><use href="#i-plus" /></svg> Agregar pregunta
                                     </button>
                                 </section>
@@ -1086,10 +758,7 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
                                     <ul class="help-list">
                                         <li>
                                             <svg class="icon"><use href="#i-info" /></svg
-                                            ><span
-                                                >En el inicio público se muestran solo las <strong>primeras 4</strong> preguntas de la
-                                                lista.</span
-                                            >
+                                            ><span>Todas las preguntas se muestran en Preguntas frecuentes junto con su buscador.</span>
                                         </li>
                                         <li>
                                             <svg class="icon"><use href="#i-info" /></svg
@@ -1105,8 +774,10 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
                                 <!-- Ultima actualizacion -->
                                 <div class="update-box">
                                     <p class="label">Última actualización</p>
-                                    <p class="value">12/11/2026, 10:15 · [Nombre completo]</p>
-                                    <p class="note">La fecha, la hora y el usuario lo registra el sistema al guardar.</p>
+                                    <p class="value">
+                                        <?= htmlspecialchars((string) $ultimaActualizacion, ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8") ?>
+                                    </p>
+                                    <p class="note">La fecha se actualiza al guardar las preguntas frecuentes.</p>
                                 </div>
                             </div>
                         </div>
@@ -1114,7 +785,7 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
                         <!-- Botones -->
                         <div class="actions-row">
                             <a href="panel_control.php" class="btn btn-secondary-brand">Cancelar</a>
-                            <button type="submit" class="btn btn-primary-brand">
+                            <button type="submit" class="btn btn-primary-brand" <?= !$cargaCorrecta ? "disabled" : "" ?>>
                                 <svg class="icon"><use href="#i-circle-check" /></svg> Guardar cambios
                             </button>
                         </div>
@@ -1123,8 +794,8 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
             </main>
         </div>
 
-        <?php include "includes/iconos.php"; ?>
-        <?php include "includes/iconos_catalogo.php"; ?>
+        <?php include __DIR__ . "/includes/iconos.php"; ?>
+        <?php include __DIR__ . "/includes/iconos_catalogo.php"; ?>
 
         <script src="./js/bootstrap.bundle.min.js"></script>
         <script src="./js/ver_password.js"></script>
@@ -1141,6 +812,10 @@ $pagina_activa = "datos_biblioteca_preguntas.php";
                 boton.addEventListener("click", function () {
                     var lista = document.getElementById(boton.dataset.add);
                     var plantilla = document.getElementById("tpl-" + boton.dataset.add);
+                    if (lista.querySelectorAll(".repeat-row").length >= 30) {
+                        alert("Puedes registrar hasta 30 preguntas.");
+                        return;
+                    }
                     lista.appendChild(plantilla.content.cloneNode(true));
                     numerarLista(lista);
                 });

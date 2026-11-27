@@ -1,8 +1,181 @@
 <?php
-require "includes/sesion.php";
+require_once __DIR__ . "/includes/sesion.php";
 exigir_bibliotecario();
-require "config/conexion.php";
+require_once __DIR__ . "/config/conexion.php";
+
+/** @var mysqli $conexion */
+if (!isset($conexion) || !($conexion instanceof mysqli)) {
+    die("No se pudo establecer la conexión con la base de datos.");
+}
+
 $pagina_activa = "datos_biblioteca_horario.php";
+$error = "";
+$mensaje = $_SESSION["mensaje_horario"] ?? "";
+unset($_SESSION["mensaje_horario"]);
+
+if (empty($_SESSION["csrf_horario"])) {
+    $_SESSION["csrf_horario"] = bin2hex(random_bytes(32));
+}
+
+function escapar_horario($valor) {
+    return htmlspecialchars((string) $valor, ENT_QUOTES, "UTF-8");
+}
+
+// Valores iniciales del diseño, mientras no existan horarios registrados.
+$informacionBiblioteca = [
+    "ubicacion" => "", "telefono" => "", "correo" => "",
+    "descripcion_biblioteca" => "", "mision" => "", "vision" => "",
+    "hora_apertura" => "08:00", "hora_cierre" => "15:00",
+    "fin_de_semana_cerrado" => 1,
+    "cierre_inicio" => "", "cierre_fin" => "", "cierre_nota" => "",
+    "actualizado_en" => null, "usuario" => null
+];
+$informacionDesdeBD = false;
+$idCierre = 0;
+
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try {
+    $resultado = mysqli_query($conexion, "SELECT b.id_biblioteca, b.descripcion AS descripcion_biblioteca, b.mision, b.vision, b.direccion AS ubicacion,
+        b.telefono, b.correo, b.fecha_actualizada AS actualizado_en, u.usuario
+        FROM tblbiblioteca b LEFT JOIN tblbibliotecario u
+        ON b.id_bibliotecario = u.id_bibliotecario ORDER BY b.id_biblioteca ASC LIMIT 1");
+    $contacto = mysqli_fetch_assoc($resultado);
+    mysqli_free_result($resultado);
+    if (!$contacto) {
+        throw new RuntimeException("No existe el registro de biblioteca.");
+    }
+    $informacionBiblioteca = array_replace($informacionBiblioteca, $contacto);
+    $idBiblioteca = (int) $contacto["id_biblioteca"];
+
+    // Convención: lunes = 1, domingo = 7.
+    $resultado = mysqli_query($conexion, "SELECT dia_semana, hora_apertura, hora_cierre, cerrado
+        FROM tblhorarios_biblioteca ORDER BY dia_semana");
+    $horarios = [];
+    while ($fila = mysqli_fetch_assoc($resultado)) {
+        $horarios[(int) $fila["dia_semana"]] = $fila;
+    }
+    mysqli_free_result($resultado);
+    if (isset($horarios[1])) {
+        $informacionBiblioteca["hora_apertura"] = $horarios[1]["hora_apertura"] ?? "";
+        $informacionBiblioteca["hora_cierre"] = $horarios[1]["hora_cierre"] ?? "";
+    }
+    if (isset($horarios[6], $horarios[7])) {
+        $informacionBiblioteca["fin_de_semana_cerrado"] =
+            (int) ($horarios[6]["cerrado"] && $horarios[7]["cerrado"]);
+    }
+
+    // El formulario administra un solo periodo: el último registrado.
+    $resultado = mysqli_query($conexion, "SELECT id_cierre, fecha_inicio, fecha_fin, nota
+        FROM tblcierres_biblioteca ORDER BY id_cierre DESC LIMIT 1");
+    if ($cierre = mysqli_fetch_assoc($resultado)) {
+        $idCierre = (int) $cierre["id_cierre"];
+        $informacionBiblioteca["cierre_inicio"] = $cierre["fecha_inicio"];
+        $informacionBiblioteca["cierre_fin"] = $cierre["fecha_fin"];
+        $informacionBiblioteca["cierre_nota"] = $cierre["nota"];
+    }
+    mysqli_free_result($resultado);
+    $informacionDesdeBD = true;
+} catch (Exception $e) {
+    error_log($e->getMessage());
+    $error = "No se pudo consultar el horario y contacto.";
+}
+
+if ($_SERVER["REQUEST_METHOD"] === "POST" && $informacionDesdeBD) {
+    $token = $_POST["csrf"] ?? "";
+    if (!is_string($token) || !hash_equals($_SESSION["csrf_horario"], $token)) {
+        $error = "El formulario no es válido.";
+    } else {
+        $datos = [];
+        foreach (["descripcion_biblioteca", "mision", "vision", "ubicacion", "telefono", "correo", "hora_apertura", "hora_cierre",
+                  "cierre_inicio", "cierre_fin", "cierre_nota"] as $campo) {
+            $valor = $_POST[$campo] ?? "";
+            if (!is_string($valor)) {
+                $error = "Los datos del formulario no son válidos.";
+                break;
+            }
+            $datos[$campo] = trim($valor);
+        }
+        if ($error === "") {
+            $datos["fin_de_semana_cerrado"] = (int) (($_POST["fin_de_semana_cerrado"] ?? "") === "1");
+             $informacionBiblioteca = array_replace($informacionBiblioteca, $datos);
+            $idBibliotecario = (int) ($_SESSION["id_bibliotecario"] ?? 0);
+            $apertura = $datos["hora_apertura"];
+            $fin = $datos["hora_cierre"];
+            $desde = $datos["cierre_inicio"];
+            $hasta = $datos["cierre_fin"];
+            $nota = $datos["cierre_nota"];
+            $formatoHora = '/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/D';
+            $fechaValida = function ($fecha) {
+                $obj = DateTime::createFromFormat("!Y-m-d", $fecha);
+                return $obj && $obj->format("Y-m-d") === $fecha;
+            };
+            if ($idBibliotecario <= 0 || $datos["ubicacion"] === "") {
+                $error = "Verifica la dirección y la sesión.";
+            } elseif ($datos["descripcion_biblioteca"] === "" || $datos["mision"] === "" || $datos["vision"] === "") {
+                $error = "Completa la descripción, misión y visión.";
+            } elseif (mb_strlen($datos["descripcion_biblioteca"], "UTF-8") > 3000 || mb_strlen($datos["mision"], "UTF-8") > 3000 || mb_strlen($datos["vision"], "UTF-8") > 3000 || mb_strlen($datos["ubicacion"], "UTF-8") > 255 || mb_strlen($datos["telefono"], "UTF-8") > 40 || mb_strlen($datos["correo"], "UTF-8") > 254 || mb_strlen($nota, "UTF-8") > 500) {
+                $error = "Uno de los campos supera la longitud permitida.";
+            } elseif (!preg_match($formatoHora, $apertura) || !preg_match($formatoHora, $fin) || $apertura >= $fin) {
+                $error = "La hora de cierre debe ser posterior a la apertura.";
+            } elseif ($datos["correo"] !== "" && !filter_var($datos["correo"], FILTER_VALIDATE_EMAIL)) {
+                $error = "Escribe un correo válido.";
+            } elseif (($desde === "") !== ($hasta === "") || ($desde !== "" && (!$fechaValida($desde) || !$fechaValida($hasta) || $desde > $hasta))) {
+                $error = "Indica un periodo de cierre válido o deja ambas fechas vacías.";
+            } elseif ($desde === "" && $nota !== "") {
+                $error = "Indica las fechas para guardar una nota de cierre.";
+            }
+        }
+        if ($error === "") {
+            try {
+                mysqli_begin_transaction($conexion);
+                $consulta = mysqli_prepare($conexion, "UPDATE tblbiblioteca SET descripcion = ?, mision = ?, vision = ?, direccion = ?,
+                    telefono = ?, correo = ?, fecha_actualizada = NOW(), id_bibliotecario = ?
+                    WHERE id_biblioteca = ?");
+                mysqli_stmt_bind_param($consulta, "ssssssii", $datos["descripcion_biblioteca"], $datos["mision"], $datos["vision"], $datos["ubicacion"], $datos["telefono"], $datos["correo"], $idBibliotecario, $idBiblioteca);
+                mysqli_stmt_execute($consulta);
+                mysqli_stmt_close($consulta);
+
+                $consulta = mysqli_prepare($conexion, "INSERT INTO tblhorarios_biblioteca
+                    (dia_semana, hora_apertura, hora_cierre, cerrado) VALUES (?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE hora_apertura = VALUES(hora_apertura),
+                    hora_cierre = VALUES(hora_cierre), cerrado = VALUES(cerrado)");
+                mysqli_stmt_bind_param($consulta, "issi", $dia, $horaApertura, $horaCierre, $cerrado);
+                for ($dia = 1; $dia <= 7; $dia++) {
+                    $cerrado = ($dia >= 6 && $datos["fin_de_semana_cerrado"] === 1) ? 1 : 0;
+                    $horaApertura = $cerrado ? null : $apertura;
+                    $horaCierre = $cerrado ? null : $fin;
+                    mysqli_stmt_execute($consulta);
+                }
+                mysqli_stmt_close($consulta);
+
+                if ($desde !== "") {
+                    if ($idCierre > 0) {
+                        $consulta = mysqli_prepare($conexion, "UPDATE tblcierres_biblioteca SET fecha_inicio = ?, fecha_fin = ?, nota = ? WHERE id_cierre = ?");
+                        mysqli_stmt_bind_param($consulta, "sssi", $desde, $hasta, $nota, $idCierre);
+                    } else {
+                        $consulta = mysqli_prepare($conexion, "INSERT INTO tblcierres_biblioteca (fecha_inicio, fecha_fin, nota) VALUES (?, ?, ?)");
+                        mysqli_stmt_bind_param($consulta, "sss", $desde, $hasta, $nota);
+                    }
+                    mysqli_stmt_execute($consulta);
+                    mysqli_stmt_close($consulta);
+                } elseif ($idCierre > 0) {
+                    $consulta = mysqli_prepare($conexion, "DELETE FROM tblcierres_biblioteca WHERE id_cierre = ?");
+                    mysqli_stmt_bind_param($consulta, "i", $idCierre);
+                    mysqli_stmt_execute($consulta);
+                    mysqli_stmt_close($consulta);
+                }
+                mysqli_commit($conexion);
+                $_SESSION["mensaje_horario"] = "Los cambios se guardaron correctamente.";
+                header("Location: datos_biblioteca_horario.php");
+                exit;
+            } catch (Exception $e) {
+                mysqli_rollback($conexion);
+                error_log($e->getMessage());
+                $error = "No se pudo guardar el horario y contacto.";
+            }
+        }
+    }
+}
 ?>
 <!doctype html>
 <html lang="es">
@@ -10,7 +183,7 @@ $pagina_activa = "datos_biblioteca_horario.php";
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-        <title>Horario y contacto - Datos de la biblioteca</title>
+        <title>Nosotros, horario y contacto - Datos de la biblioteca</title>
 
         <!-- Fuente Poppins (guia de estilos) -->
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -19,779 +192,8 @@ $pagina_activa = "datos_biblioteca_horario.php";
 
         <link rel="stylesheet" href="./css/bootstrap.min.css" />
         <link rel="stylesheet" href="./css/bibliotecario.css" />
+        <link rel="stylesheet" href="./css/biblioteca_horarios.css" />
 
-        <style>
-            /* Colores de la guia de estilos */
-            :root {
-                --green-main: #0f5132;
-                --green-medium: #2e7d58;
-                --green-dark: #0a3d26;
-                --green-success: #1f6b47;
-                --green-soft: #e6f4ec;
-                --blue-accent: #1e3a8a;
-                --red-alert: #b42318;
-                --red-soft: #fee4e2;
-                --gray-light: #f5f7f6;
-                --text-main: #212121;
-                --text-muted: #4b5563;
-                --border-card: #e5e7eb;
-                --border-field: #d0d5dd;
-            }
-
-            body {
-                font-family: "Poppins", "Segoe UI", Arial, sans-serif;
-                font-size: 14px;
-                line-height: 1.5;
-                color: var(--text-main);
-                background-color: var(--gray-light);
-            }
-
-            .icon {
-                width: 18px;
-                height: 18px;
-                fill: none;
-                stroke: currentColor;
-                stroke-width: 1.75;
-                stroke-linecap: round;
-                stroke-linejoin: round;
-                flex-shrink: 0;
-            }
-
-            .admin-layout {
-                display: flex;
-                min-height: 100vh;
-            }
-
-            /* ---------- Menu lateral ---------- */
-            .sidebar {
-                width: 220px;
-                flex-shrink: 0;
-                background-color: var(--green-main);
-                color: #ffffff;
-                display: flex;
-                flex-direction: column;
-                position: sticky;
-                top: 0;
-                height: 100vh;
-            }
-
-            .sidebar-brand {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 14px 16px;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-                text-decoration: none;
-                color: #ffffff;
-            }
-            .sidebar-brand img {
-                height: 34px;
-                width: auto;
-            }
-            .sidebar-brand .brand-name {
-                font-weight: 600;
-                font-size: 13px;
-                line-height: 1.2;
-                display: block;
-            }
-            .sidebar-brand .brand-sub {
-                font-size: 10px;
-                line-height: 1.2;
-                display: block;
-            }
-
-            .sidebar-menu {
-                list-style: none;
-                margin: 0;
-                padding: 0;
-            }
-            .sidebar-menu a {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                padding: 9px 18px;
-                color: #ffffff;
-                font-size: 13px;
-                line-height: 1.25;
-                text-decoration: none;
-                border-left: 4px solid transparent;
-            }
-            .sidebar-menu a:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-            .sidebar-menu a.active {
-                background-color: var(--green-medium);
-                border-left-color: #ffffff;
-            }
-            .sidebar-menu a:focus-visible {
-                outline: 3px solid #ffffff;
-                outline-offset: -3px;
-            }
-
-            .sidebar-main {
-                flex-grow: 1;
-            }
-
-            .user-card {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                margin: 0 12px 14px 12px;
-                padding: 10px 12px;
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.18);
-                border-radius: 10px;
-            }
-            .user-avatar {
-                width: 32px;
-                height: 32px;
-                border-radius: 50%;
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .user-name {
-                font-size: 12px;
-                line-height: 1.2;
-                font-weight: 500;
-                display: block;
-            }
-            .user-role {
-                font-size: 11px;
-                line-height: 1.2;
-                display: block;
-                margin-top: 2px;
-            }
-
-            .sidebar-bottom {
-                border-top: 1px solid rgba(255, 255, 255, 0.15);
-                padding-top: 4px;
-                margin-bottom: 8px;
-            }
-
-            /* ---------- Contenido ---------- */
-            .admin-main {
-                flex-grow: 1;
-                min-width: 0;
-                padding: 36px 40px;
-            }
-            .admin-content {
-                max-width: 1080px;
-                margin: 0 auto;
-            }
-
-            .page-title {
-                font-size: 28px;
-                font-weight: 600;
-                color: var(--green-main);
-                margin: 0 0 6px 0;
-            }
-            .page-subtitle {
-                color: var(--text-muted);
-                font-size: 14px;
-                margin: 0 0 22px 0;
-            }
-
-            .form-layout {
-                display: grid;
-                grid-template-columns: 1fr 390px;
-                gap: 20px;
-                align-items: start;
-            }
-            .form-column {
-                display: flex;
-                flex-direction: column;
-                gap: 20px;
-            }
-
-            /* tarjetas */
-            .form-card {
-                background-color: #ffffff;
-                border: 1px solid var(--border-card);
-                border-radius: 12px;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-                padding: 22px 24px;
-            }
-
-            .card-header-row {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-bottom: 12px;
-            }
-            .card-header-row.has-subtitle {
-                align-items: flex-start;
-            }
-            .card-icon {
-                width: 30px;
-                height: 30px;
-                border-radius: 50%;
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .card-icon .icon {
-                width: 16px;
-                height: 16px;
-            }
-            .card-title {
-                font-size: 16px;
-                font-weight: 600;
-                margin: 0;
-                line-height: 1.3;
-            }
-            .card-subtitle {
-                font-size: 13px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-
-            /* campos */
-            .field-label {
-                font-size: 13px;
-                font-weight: 500;
-                margin-bottom: 5px;
-                display: block;
-            }
-            .field-label .optional {
-                font-weight: 400;
-                color: var(--text-muted);
-            }
-
-            .form-control {
-                height: 41px;
-                border: 1px solid var(--border-field);
-                border-radius: 8px;
-                font-size: 14px;
-                padding: 0 13px;
-                color: var(--text-main);
-            }
-            textarea.form-control {
-                height: auto;
-                min-height: 80px;
-                padding: 9px 13px;
-                resize: vertical;
-            }
-            .form-control::placeholder {
-                color: #6b7280;
-            }
-            .form-control:focus {
-                border: 2px solid var(--blue-accent);
-                box-shadow: none;
-                padding-left: 11px;
-            }
-            textarea.form-control:focus {
-                padding: 7px 11px;
-            }
-
-            .field-block {
-                margin-bottom: 12px;
-            }
-            .field-block:last-child {
-                margin-bottom: 0;
-            }
-
-            .group-label {
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                color: var(--green-main);
-                margin: 0 0 8px 0;
-            }
-
-            /* interruptor de fin de semana */
-            .toggle-row {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                height: 41px;
-                padding: 0 13px;
-                border: 1px solid var(--border-field);
-                border-radius: 8px;
-                font-size: 14px;
-            }
-            .switch {
-                position: relative;
-                width: 38px;
-                height: 21px;
-                flex-shrink: 0;
-            }
-            .switch input {
-                opacity: 0;
-                width: 100%;
-                height: 100%;
-                position: absolute;
-                inset: 0;
-                margin: 0;
-                cursor: pointer;
-                z-index: 1;
-            }
-            .switch-track {
-                position: absolute;
-                inset: 0;
-                border-radius: 999px;
-                background-color: #d0d5dd;
-                transition: background-color 0.15s;
-            }
-            .switch-track::after {
-                content: "";
-                position: absolute;
-                top: 3px;
-                left: 3px;
-                width: 15px;
-                height: 15px;
-                border-radius: 50%;
-                background-color: #ffffff;
-                transition: transform 0.15s;
-            }
-            .switch input:checked + .switch-track {
-                background-color: var(--green-main);
-            }
-            .switch input:checked + .switch-track::after {
-                transform: translateX(17px);
-            }
-            .switch input:focus-visible + .switch-track {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-
-            .help-text {
-                display: flex;
-                align-items: flex-start;
-                gap: 8px;
-                color: var(--text-muted);
-                font-size: 12px;
-                margin: 10px 0 0 0;
-                line-height: 1.45;
-            }
-            .help-text .icon {
-                width: 13px;
-                height: 13px;
-                margin-top: 2px;
-            }
-
-            /* ultima actualizacion */
-            .update-box {
-                background-color: var(--green-soft);
-                border: 1px solid #bfd9cb;
-                border-radius: 12px;
-                padding: 16px 20px;
-            }
-            .update-box .label {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-            .update-box .value {
-                font-size: 14px;
-                font-weight: 500;
-                margin: 4px 0;
-            }
-            .update-box .note {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-
-            /* mensajes */
-            .message-box {
-                display: flex;
-                align-items: flex-start;
-                gap: 10px;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 13px;
-                margin-bottom: 16px;
-            }
-            .message-error {
-                background-color: var(--red-soft);
-                color: var(--red-alert);
-            }
-            .message-success {
-                background-color: var(--green-soft);
-                color: var(--green-success);
-            }
-            .message-box ul {
-                margin: 0;
-                padding-left: 18px;
-            }
-
-            /* botones */
-            .actions-row {
-                display: flex;
-                justify-content: flex-end;
-                gap: 10px;
-                margin-top: 20px;
-            }
-            .btn-primary-brand,
-            .btn-secondary-brand {
-                font-size: 14px;
-                font-weight: 500;
-                border-radius: 8px;
-                min-height: 42px;
-                padding: 6px 20px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
-            }
-            .btn-primary-brand {
-                background-color: var(--green-main);
-                color: #ffffff;
-                border: 1.5px solid var(--green-main);
-            }
-            .btn-primary-brand:hover {
-                background-color: var(--green-medium);
-                border-color: var(--green-medium);
-                color: #ffffff;
-            }
-            .btn-primary-brand:active {
-                background-color: var(--green-dark) !important;
-                color: #ffffff;
-            }
-            .btn-secondary-brand {
-                background-color: #ffffff;
-                color: var(--green-main);
-                border: 1.5px solid var(--green-main);
-            }
-            .btn-secondary-brand:hover {
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                border-color: var(--green-main);
-            }
-            .btn-primary-brand:focus-visible,
-            .btn-secondary-brand:focus-visible {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-
-            /* imagenes (logo e imagen principal) */
-            .upload-row {
-                display: flex;
-                gap: 16px;
-            }
-            .upload-logo {
-                width: 150px;
-                flex-shrink: 0;
-            }
-            .upload-main {
-                flex-grow: 1;
-                min-width: 0;
-            }
-            .upload-preview {
-                height: 120px;
-                border: 1.5px dashed #d0d5dd;
-                border-radius: 8px;
-                background-color: var(--gray-light);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                overflow: hidden;
-            }
-            .upload-preview.on-white {
-                background-color: #ffffff;
-            }
-            .upload-preview img {
-                max-height: 90px;
-                width: auto;
-            }
-            .upload-preview.cover img {
-                max-height: none;
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            }
-            .btn-upload {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                min-height: 34px;
-                margin-top: 10px;
-                padding: 0 12px;
-                border: 1.5px solid var(--green-main);
-                border-radius: 8px;
-                background-color: #ffffff;
-                color: var(--green-main);
-                font-size: 13px;
-                font-weight: 600;
-                cursor: pointer;
-            }
-            .btn-upload:hover {
-                background-color: var(--green-soft);
-            }
-            .btn-upload .icon {
-                width: 15px;
-                height: 15px;
-            }
-            .upload-input {
-                position: absolute;
-                width: 1px;
-                height: 1px;
-                opacity: 0;
-            }
-            .upload-input:focus-visible + .btn-upload {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-            .file-name {
-                display: block;
-                font-size: 12px;
-                color: var(--text-muted);
-                margin-top: 6px;
-            }
-
-            /* listas que se pueden agregar y quitar */
-            .repeat-row {
-                border-top: 1px solid #e5e7eb;
-                margin-top: 14px;
-                padding-top: 12px;
-            }
-            .repeat-row:first-child {
-                margin-top: 4px;
-            }
-            .row-head {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                min-height: 26px;
-                margin-bottom: 8px;
-            }
-            .row-label {
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                color: var(--green-main);
-            }
-            .btn-delete {
-                width: 30px;
-                height: 30px;
-                border: none;
-                border-radius: 8px;
-                background-color: #fff5f4;
-                color: var(--red-alert);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .btn-delete:hover {
-                background-color: var(--red-soft);
-            }
-            .btn-delete:focus-visible {
-                outline: 3px solid var(--blue-accent);
-            }
-            .btn-add {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                min-height: 36px;
-                margin-top: 14px;
-                padding: 0 14px;
-                border: 1.5px dashed var(--green-medium);
-                border-radius: 8px;
-                background-color: #f5f7f6;
-                color: var(--green-main);
-                font-size: 13px;
-                font-weight: 600;
-            }
-            .btn-add:hover {
-                background-color: var(--green-soft);
-            }
-            .btn-add:focus-visible {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-            .btn-add .icon {
-                width: 15px;
-                height: 15px;
-            }
-            .field-note {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 6px 0 0 0;
-            }
-
-            /* ---------- Submodulos del menu lateral ---------- */
-            .sidebar-menu a.parent-active {
-                border-left-color: #ffffff;
-                font-weight: 600;
-            }
-            .sidebar-menu a .chevron {
-                margin-left: auto;
-                width: 16px;
-                height: 16px;
-            }
-            .submenu {
-                list-style: none;
-                margin: 0;
-                padding: 2px 0 8px 0;
-                background-color: rgba(0, 0, 0, 0.14);
-            }
-            .submenu a {
-                padding: 7px 18px 7px 46px;
-                font-size: 12.5px;
-            }
-            .submenu a.active {
-                background-color: var(--green-medium);
-                border-left-color: #ffffff;
-                font-weight: 500;
-            }
-
-            /* ---------- Encabezado de la pagina ---------- */
-            .breadcrumb-line {
-                font-size: 13px;
-                color: var(--text-muted);
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                margin-bottom: 8px;
-                flex-wrap: wrap;
-            }
-            .breadcrumb-line a {
-                color: var(--blue-accent);
-                text-decoration: none;
-            }
-            .breadcrumb-line a:hover {
-                text-decoration: underline;
-            }
-            .breadcrumb-line .icon {
-                width: 13px;
-                height: 13px;
-            }
-
-            /* tarjeta de ayuda (columna derecha) */
-            .help-list {
-                list-style: none;
-                margin: 0;
-                padding: 0;
-            }
-            .help-list li {
-                display: flex;
-                gap: 10px;
-                font-size: 13px;
-                color: var(--text-main);
-                margin-bottom: 12px;
-                line-height: 1.45;
-            }
-            .help-list li:last-child {
-                margin-bottom: 0;
-            }
-            .help-list .icon {
-                color: var(--green-main);
-                margin-top: 2px;
-                width: 16px;
-                height: 16px;
-            }
-
-            /* imagenes apiladas dentro de la columna derecha */
-            .upload-row.stacked {
-                flex-direction: column;
-                gap: 20px;
-            }
-            .upload-row.stacked .upload-logo {
-                width: 100%;
-            }
-            .upload-row.stacked .upload-preview {
-                height: 130px;
-            }
-
-            /* la columna verde del menu llega hasta abajo aunque la pagina sea larga */
-            .admin-layout {
-                background: linear-gradient(to right, var(--green-main) 220px, transparent 220px);
-            }
-            @media (max-width: 991.98px) {
-                .admin-layout {
-                    background: none;
-                }
-            }
-            .form-layout.equal {
-                grid-template-columns: 1fr 1fr;
-            }
-            @media (max-width: 991.98px) {
-                .form-layout.equal {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            /* pantallas medianas y chicas: el menu pasa arriba */
-            @media (max-width: 991.98px) {
-                .admin-layout {
-                    flex-direction: column;
-                }
-                .sidebar {
-                    width: 100%;
-                    height: auto;
-                    position: static;
-                }
-                .admin-main {
-                    padding: 28px 20px;
-                }
-                .form-layout {
-                    grid-template-columns: 1fr;
-                }
-            }
-        </style>
-        <style data-ajuste="2">
-            .admin-layout {
-                background: linear-gradient(to right, var(--green-main) 200px, transparent 200px);
-            }
-            .sidebar {
-                width: 200px;
-            }
-            .sidebar-brand img {
-                height: 38px;
-            }
-            .sidebar-menu a {
-                padding: 8px 16px;
-                font-size: 12.5px;
-            }
-            .admin-main {
-                padding: 28px 32px;
-            }
-            .admin-content {
-                max-width: 1360px;
-            }
-            .table-lib thead th,
-            .table-lib td {
-                padding: 10px 12px;
-                font-size: 13px;
-            }
-            .page-title {
-                font-size: 24px;
-            }
-            .page-subtitle {
-                font-size: 13px;
-            }
-            .panel-head {
-                padding: 16px 20px;
-            }
-            .panel-head h2 {
-                font-size: 20px;
-            }
-            .panel-head p {
-                font-size: 13px;
-            }
-            .icon-circle {
-                width: 40px;
-                height: 40px;
-            }
-            .btn-brand,
-            .btn-outline-brand,
-            .btn-brand-outline,
-            .btn-danger-outline {
-                min-height: 36px;
-                padding: 6px 14px;
-                font-size: 13px;
-            }
-        </style>
     </head>
 
     <body>
@@ -948,17 +350,63 @@ $pagina_activa = "datos_biblioteca_horario.php";
                     <nav class="breadcrumb-line" aria-label="Ruta de navegación">
                         <a href="datos_biblioteca.php">Datos de la biblioteca</a>
                         <svg class="icon"><use href="#i-chevron-right" /></svg>
-                        <span>Horario y contacto</span>
+                        <span>Nosotros, horario y contacto</span>
                     </nav>
-                    <h1 class="page-title">Horario y contacto</h1>
-                    <p class="page-subtitle">Define cuándo abre la biblioteca, los periodos de cierre y cómo contactarla.</p>
+                    <h1 class="page-title">Nosotros, horario y contacto</h1>
+                    <p class="page-subtitle">Edita la información institucional que se muestra en Nosotros, el horario y los datos de contacto.</p>
 
-                    <!-- Mensajes -->
+                    <?php if ($error !== ""): ?>
+                        <div class="alert alert-danger" role="alert"><?= escapar_horario($error) ?></div>
+                    <?php endif; ?>
+                    <?php if ($mensaje !== ""): ?>
+                        <div class="alert alert-success" role="status"><?= escapar_horario($mensaje) ?></div>
+                    <?php endif; ?>
+                    <?php if (!$informacionDesdeBD): ?>
+                        <div class="alert alert-warning" role="alert">
+                            No se encontró el registro de información institucional. Ejecuta primero el archivo
+                            <strong>sql/nosotros.sql</strong>; los valores actuales son provisionales.
+                        </div>
+                    <?php endif; ?>
 
                     <form action="" method="POST">
+                        <input type="hidden" name="csrf" value="<?= escapar_horario($_SESSION["csrf_horario"]) ?>" />
                         <div class="form-layout">
                             <!-- Columna izquierda -->
                             <div class="form-column">
+                                <section class="form-card">
+                                    <div class="card-header-row has-subtitle">
+                                        <div class="card-icon">
+                                            <svg class="icon"><use href="#i-school" /></svg>
+                                        </div>
+                                        <div>
+                                            <h2 class="card-title">Información de la biblioteca</h2>
+                                            <p class="card-subtitle">Estos textos se muestran en la página pública Nosotros.</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="field-block">
+                                        <label for="descripcion_biblioteca" class="field-label">Descripción de la biblioteca</label>
+                                        <textarea
+                                            id="descripcion_biblioteca"
+                                            name="descripcion_biblioteca"
+                                            class="form-control"
+                                            rows="3"
+                                            maxlength="3000"
+                                            required
+                                        ><?= escapar_horario($informacionBiblioteca["descripcion_biblioteca"]) ?></textarea>
+                                    </div>
+
+                                    <div class="field-block">
+                                        <label for="mision" class="field-label">Misión</label>
+                                        <textarea id="mision" name="mision" class="form-control" rows="3" maxlength="3000" required><?= escapar_horario($informacionBiblioteca["mision"]) ?></textarea>
+                                    </div>
+
+                                    <div class="field-block mb-0">
+                                        <label for="vision" class="field-label">Visión</label>
+                                        <textarea id="vision" name="vision" class="form-control" rows="3" maxlength="3000" required><?= escapar_horario($informacionBiblioteca["vision"]) ?></textarea>
+                                    </div>
+                                </section>
+
                                 <section class="form-card">
                                     <div class="card-header-row">
                                         <div class="card-icon">
@@ -976,7 +424,7 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                                 id="hora_apertura"
                                                 name="hora_apertura"
                                                 class="form-control"
-                                                value="08:00"
+                                                value="<?= escapar_horario(substr($informacionBiblioteca["hora_apertura"], 0, 5)) ?>"
                                                 required
                                             />
                                         </div>
@@ -987,7 +435,7 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                                 id="hora_cierre"
                                                 name="hora_cierre"
                                                 class="form-control"
-                                                value="15:00"
+                                                value="<?= escapar_horario(substr($informacionBiblioteca["hora_cierre"], 0, 5)) ?>"
                                                 required
                                             />
                                         </div>
@@ -997,7 +445,12 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                     <div class="toggle-row">
                                         <span>Cerrados</span>
                                         <label class="switch" aria-label="Sábado y domingo cerrados">
-                                            <input type="checkbox" name="fin_de_semana_cerrado" checked />
+                                            <input
+                                                type="checkbox"
+                                                name="fin_de_semana_cerrado"
+                                                value="1"
+                                                <?= (int) $informacionBiblioteca["fin_de_semana_cerrado"] === 1 ? "checked" : "" ?>
+                                            />
                                             <span class="switch-track"></span>
                                         </label>
                                     </div>
@@ -1005,8 +458,7 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                     <p class="help-text">
                                         <svg class="icon"><use href="#i-info" /></svg>
                                         <span
-                                            >La tarjeta «Hoy en la biblioteca» muestra <strong>Abierta ahora</strong> o
-                                            <strong>Cerrada</strong> según este horario y la hora del servidor.</span
+                                            >La página Nosotros muestra este horario. Si abres en fin de semana, se usará el mismo horario indicado arriba.</span
                                         >
                                     </p>
                                 </section>
@@ -1027,13 +479,25 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                             <label for="cierre_inicio" class="field-label"
                                                 >Desde <span class="optional">(opcional)</span></label
                                             >
-                                            <input type="date" id="cierre_inicio" name="cierre_inicio" class="form-control" value="" />
+                                            <input
+                                                type="date"
+                                                id="cierre_inicio"
+                                                name="cierre_inicio"
+                                                class="form-control"
+                                                value="<?= escapar_horario($informacionBiblioteca["cierre_inicio"] ?? "") ?>"
+                                            />
                                         </div>
                                         <div class="col-6">
                                             <label for="cierre_fin" class="field-label"
                                                 >Hasta <span class="optional">(opcional)</span></label
                                             >
-                                            <input type="date" id="cierre_fin" name="cierre_fin" class="form-control" value="" />
+                                            <input
+                                                type="date"
+                                                id="cierre_fin"
+                                                name="cierre_fin"
+                                                class="form-control"
+                                                value="<?= escapar_horario($informacionBiblioteca["cierre_fin"] ?? "") ?>"
+                                            />
                                         </div>
                                     </div>
 
@@ -1044,16 +508,16 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                             name="cierre_nota"
                                             class="form-control"
                                             rows="3"
+                                            maxlength="500"
                                             placeholder="Ej. Periodo vacacional de verano"
-                                        ></textarea>
+                                        ><?= escapar_horario($informacionBiblioteca["cierre_nota"] ?? "") ?></textarea>
                                     </div>
 
                                     <p class="help-text">
                                         <svg class="icon"><use href="#i-info" /></svg>
                                         <span
                                             >Si hoy cae dentro de este rango, la biblioteca se muestra como <strong>Cerrada</strong> aunque
-                                            el horario normal diga otra cosa. La nota aparece en la tarjeta del inicio como periodo
-                                            vacacional.</span
+                                            el horario normal diga otra cosa. La nota aparece en la página Nosotros.</span
                                         >
                                     </p>
                                 </section>
@@ -1068,7 +532,7 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                         </div>
                                         <div>
                                             <h2 class="card-title">Contacto</h2>
-                                            <p class="card-subtitle">Se muestra en el pie del inicio público y en la página Nosotros.</p>
+                                            <p class="card-subtitle">Se muestra en la página Nosotros y en su pie de página.</p>
                                         </div>
                                     </div>
 
@@ -1077,9 +541,10 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                         <input
                                             type="text"
                                             id="direccion"
-                                            name="direccion"
+                                            name="ubicacion"
                                             class="form-control"
-                                            value="CBTa No. 5, Huejutla de Reyes, Hgo."
+                                            value="<?= escapar_horario($informacionBiblioteca["ubicacion"]) ?>"
+                                            required
                                         />
                                     </div>
 
@@ -1087,21 +552,23 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                         <div class="col-12">
                                             <label for="telefono" class="field-label">Teléfono</label>
                                             <input
-                                                type="text"
+                                                type="tel"
                                                 id="telefono"
                                                 name="telefono"
                                                 class="form-control"
-                                                value="[Teléfono de la biblioteca]"
+                                                maxlength="40"
+                                                value="<?= escapar_horario($informacionBiblioteca["telefono"] ?? "") ?>"
                                             />
                                         </div>
                                         <div class="col-12">
                                             <label for="correo" class="field-label">Correo</label>
                                             <input
-                                                type="text"
+                                                type="email"
                                                 id="correo"
                                                 name="correo"
                                                 class="form-control"
-                                                value="[Correo de la biblioteca]"
+                                                maxlength="254"
+                                                value="<?= escapar_horario($informacionBiblioteca["correo"] ?? "") ?>"
                                             />
                                         </div>
                                     </div>
@@ -1110,8 +577,10 @@ $pagina_activa = "datos_biblioteca_horario.php";
                                 <!-- Ultima actualizacion -->
                                 <div class="update-box">
                                     <p class="label">Última actualización</p>
-                                    <p class="value">12/11/2026, 10:15 · [Nombre completo]</p>
-                                    <p class="note">La fecha, la hora y el usuario lo registra el sistema al guardar.</p>
+                                    <p class="value">
+                                        <?= $informacionBiblioteca["actualizado_en"] ? escapar_horario(date("d/m/Y H:i", strtotime($informacionBiblioteca["actualizado_en"]))) : "Sin registro" ?>
+                                    </p>
+                                    <p class="note">La fecha se actualiza al guardar los cambios.</p>
                                 </div>
                             </div>
                         </div>
@@ -1119,7 +588,7 @@ $pagina_activa = "datos_biblioteca_horario.php";
                         <!-- Botones -->
                         <div class="actions-row">
                             <a href="panel_control.php" class="btn btn-secondary-brand">Cancelar</a>
-                            <button type="submit" class="btn btn-primary-brand">
+                            <button type="submit" class="btn btn-primary-brand" <?= !$informacionDesdeBD ? "disabled" : "" ?>>
                                 <svg class="icon"><use href="#i-circle-check" /></svg> Guardar cambios
                             </button>
                         </div>
