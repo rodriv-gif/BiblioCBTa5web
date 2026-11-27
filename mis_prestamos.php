@@ -1,7 +1,7 @@
 <?php
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 $pagina_activa = "mi_cuenta.php";
 $titulo = "Mis préstamos";
@@ -9,7 +9,7 @@ $subtitulo = "Libros que tienes en préstamo.";
 $icono = "i-clock";
 
 // Libros que el lector todavía no devuelve (con sus días restantes, retraso y multa)
-$prestamos = prestamos_del_lector($pdo);
+$prestamos = prestamos_del_lector($conexion);
 
 include "includes/inicio_cuenta.php";
 ?>

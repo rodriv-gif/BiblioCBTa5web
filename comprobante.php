@@ -5,13 +5,13 @@
 
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 require "lib/fpdf.php";
 
 // Solo se genera si la reserva es de este lector y sigue Activa
 $id_reserva = (int) ($_GET["id"] ?? 0);
-$reserva = reserva_del_lector($pdo, $id_reserva);
+$reserva = reserva_del_lector($conexion, $id_reserva);
 
 if (!$reserva) {
     flash_poner("error", "No encontramos esa reserva o ya no está activa.");
@@ -22,11 +22,11 @@ if (!$reserva) {
 // Datos que van en el comprobante
 $folio = $reserva["folio"] ?: "R-" . str_pad($reserva["id_reserva"], 6, "0", STR_PAD_LEFT);
 $clave_lector = ($_SESSION["matricula"] ?? "") !== "" ? $_SESSION["matricula"] : ($_SESSION["numero_control"] ?? "");
-$autores = autores_del_libro($pdo, $reserva["id_libro"]);
+$autores = autores_del_libro($conexion, $reserva["id_libro"]);
 
 // Filas del detalle: etiqueta y valor
 $detalle = [
-    ["Lector", nombre_completo_del_lector($pdo)],
+    ["Lector", nombre_completo_del_lector($conexion)],
     ["Matrícula o clave", $clave_lector],
     ["Libro", $reserva["titulo_libro"]],
 ];

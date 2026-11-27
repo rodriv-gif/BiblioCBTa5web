@@ -1,7 +1,7 @@
 <?php
 require "includes/sesion.php";
 exigir_bibliotecario();
-require "config/conexion.php"; // aquí viene la conexión ($pdo y $conexion)
+require "config/conexion.php"; // aquí viene la conexión ($conexion y $conexion)
 require "includes/consultas_ayuda.php";
 $pagina_activa = "ayuda_admin.php";
 
@@ -18,13 +18,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             flash_poner("error", "Escribe la pregunta y la respuesta.");
         } elseif (mb_strlen($pregunta) > AYUDA_MAX_PREGUNTA || mb_strlen($respuesta) > AYUDA_MAX_RESPUESTA) {
             flash_poner("error", "El texto es demasiado largo.");
-        } elseif (agregar_tema_ayuda($pdo, $pregunta, $respuesta, $orden, $_SESSION["id_bibliotecario"] ?? null)) {
+        } elseif (agregar_tema_ayuda($conexion, $pregunta, $respuesta, $orden, $_SESSION["id_bibliotecario"] ?? null)) {
             flash_poner("ok", "El tema se agregó a la ayuda.");
         } else {
             flash_poner("error", "No se pudo guardar el tema. Intenta más tarde.");
         }
     } elseif (($_POST["accion"] ?? "") === "baja") {
-        if (borrar_tema_ayuda($pdo, (int) ($_POST["id_ayuda"] ?? 0))) {
+        if (borrar_tema_ayuda($conexion, (int) ($_POST["id_ayuda"] ?? 0))) {
             flash_poner("ok", "El tema se eliminó.");
         } else {
             flash_poner("error", "No se pudo eliminar el tema.");
@@ -36,7 +36,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     exit();
 }
 
-$temas = temas_de_ayuda($pdo);
+$temas = temas_de_ayuda($conexion);
 ?>
 <!doctype html>
 <html lang="es">

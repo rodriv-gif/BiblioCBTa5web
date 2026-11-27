@@ -1,7 +1,7 @@
 <?php
 require "includes/sesion.php";
 exigir_bibliotecario();
-require "config/conexion.php"; // aquí viene la conexión ($pdo y $conexion)
+require "config/conexion.php"; // aquí viene la conexión ($conexion y $conexion)
 require "includes/consultas_panel.php";
 $pagina_activa = "panel_control.php";
 
@@ -9,12 +9,12 @@ $pagina_activa = "panel_control.php";
 $ver = ($_GET["ver"] ?? "vencidos") === "activos" ? "activos" : "vencidos";
 
 // Número de cada tarjeta
-$total_activos = contar_prestamos_activos($pdo);
-$total_vencidos = contar_prestamos_vencidos($pdo);
-$total_reservas = contar_reservas_pendientes($pdo);
+$total_activos = contar_prestamos_activos($conexion);
+$total_vencidos = contar_prestamos_vencidos($conexion);
+$total_reservas = contar_reservas_pendientes($conexion);
 
 // Tabla de abajo, según la tarjeta que se tocó
-$prestamos = prestamos_del_panel($pdo, $ver === "vencidos");
+$prestamos = prestamos_del_panel($conexion, $ver === "vencidos");
 $total_en_tabla = $ver === "vencidos" ? $total_vencidos : $total_activos;
 ?>
 <!doctype html>

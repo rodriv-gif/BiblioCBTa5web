@@ -1,7 +1,7 @@
 <?php
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 $pagina_activa = "mi_cuenta.php";
 $titulo = "Mis reservas";
@@ -9,7 +9,7 @@ $subtitulo = "Recoge tu libro en la biblioteca antes de la fecha límite.";
 $icono = "i-bookmark";
 
 // Reservas Activas del lector (las vencidas ya no se pueden recoger)
-$reservas = reservas_del_lector($pdo);
+$reservas = reservas_del_lector($conexion);
 
 include "includes/inicio_cuenta.php";
 ?>
