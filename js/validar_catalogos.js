@@ -40,6 +40,34 @@ if (formEditorial) {
     });
 }
 
+// Valida en el navegador el formulario de alta de categoría antes de enviarlo a PHP
+const formCategoria = document.getElementById('formCategoria');
+if (formCategoria) {
+    formCategoria.addEventListener('submit', function (e) {
+        const categoria = document.getElementById('nombre_categoria');
+        categoria.classList.remove('is-invalid');
+
+        if (categoria.value.trim() === '') {
+            marcarError(categoria, 'feedback-categoria-catalogo', 'Ingresa el nombre de la categoría.');
+            e.preventDefault();
+        }
+    });
+}
+
+// Valida en el navegador el formulario de alta de idioma antes de enviarlo a PHP
+const formIdioma = document.getElementById('formIdioma');
+if (formIdioma) {
+    formIdioma.addEventListener('submit', function (e) {
+        const idioma = document.getElementById('nombre_idioma');
+        idioma.classList.remove('is-invalid');
+
+        if (idioma.value.trim() === '') {
+            marcarError(idioma, 'feedback-idioma-catalogo', 'Ingresa el nombre del idioma.');
+            e.preventDefault();
+        }
+    });
+}
+
 // Pinta el borde rojo de Bootstrap y muestra el mensaje de error debajo del campo
 function marcarError(input, idFeedback, mensaje) {
     input.classList.add('is-invalid');

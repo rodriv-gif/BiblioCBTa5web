@@ -10,6 +10,21 @@ if (!isset($_SESSION['id_cuenta']) && !isset($_SESSION['id_bibliotecario'])) {
 require_once __DIR__ . '/config/conexion.php';
 $pagina_activa = "catalogo.php";
 
+// Consulta en tblconfiguracion el límite de libros y la multa diaria o aplica valores por defecto
+$maxLibros   = 3;
+$multaDiaria = 10;
+$resConf = mysqli_query($conexion, "SELECT clave, valor FROM tblconfiguracion");
+if ($resConf) {
+    while ($filaConf = mysqli_fetch_assoc($resConf)) {
+        if (($filaConf['clave'] === 'max_libros' || $filaConf['clave'] === 'max_prestamos') && is_numeric($filaConf['valor'])) {
+            $maxLibros = (int)$filaConf['valor'];
+        }
+        if (($filaConf['clave'] === 'multa_por_dia' || $filaConf['clave'] === 'multa_diaria') && is_numeric($filaConf['valor'])) {
+            $multaDiaria = (float)$filaConf['valor'];
+        }
+    }
+}
+
 // Recibe y valida el ID del libro enviado por GET igual que en curso_detalle.php
 $idLibro = $_GET['id'] ?? null;
 $libro   = null;
@@ -72,7 +87,7 @@ $tienePortada  = ($rutaFisica !== '' && file_exists($rutaFisica));
         <link rel="stylesheet" href="./css/estilos.css" />
         <link rel="stylesheet" href="./css/lector.css" />
         <link rel="stylesheet" href="./css/detalle_libro.css" />
-        <link rel="stylesheet" href="./css/footer.css" />   
+        <link rel="stylesheet" href="./css/footer.css" />
     </head>
 
     <body class="d-flex flex-column min-vh-100">
@@ -80,111 +95,104 @@ $tienePortada  = ($rutaFisica !== '' && file_exists($rutaFisica));
         <?php include "includes/iconos_catalogo.php"; ?>
         <?php include "includes/header_lector.php"; ?>
 
-        <main class="flex-grow-1">
-            <section class="book-hero">
-                <div class="container">
-                    <a href="catalogo.php" class="back-link">
-                        <svg class="icon"><use href="#i-arrow-left" /></svg> Volver al catálogo
-                    </a>
+        <main class="flex-grow-1 py-4">
+            <div class="container">
+                <a href="catalogo.php" class="back-link mb-3">
+                    <svg class="icon"><use href="#i-arrow-left" /></svg> Volver al catálogo
+                </a>
 
-                    <div class="row align-items-center g-4 mt-2">
-                        <div class="col-md-4 col-lg-3">
+                <section class="book-detail-card mb-4">
+                    <div class="row g-4 align-items-start">
+                        <div class="col-md-4 col-lg-3 d-flex justify-content-center justify-content-md-start">
                             <?php if ($tienePortada): ?>
                                 <img src="<?= htmlspecialchars($urlPortadas . $nombrePortada) ?>" alt="<?= htmlspecialchars($libro['titulo_libro']) ?>" class="book-cover-photo" />
                             <?php else: ?>
                                 <div class="book-cover">
-                                    <span class="cover-top">Biblioteca del CBTa No. 5</span>
+                                    <span class="cover-top">Biblioteca CBTa No. 5</span>
                                     <span class="cover-title"><?= htmlspecialchars($libro['titulo_libro']) ?></span>
                                     <span class="cover-line"></span>
                                     <span class="cover-author"><?= htmlspecialchars($autorLibro) ?></span>
-                                    <img src="./img/logo-cbta5-blanco.png" alt="" />
                                 </div>
                             <?php endif; ?>
                         </div>
 
                         <div class="col-md-8 col-lg-9">
-                            <span class="book-category"><?= htmlspecialchars($libro['categoria']) ?></span>
-                            <h1><?= htmlspecialchars($libro['titulo_libro']) ?></h1>
-                            <p class="author"><?= htmlspecialchars($autorLibro) ?></p>
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                <span class="book-category"><?= htmlspecialchars($libro['categoria']) ?></span>
 
-                            <div class="d-flex align-items-center flex-wrap gap-3 mb-4">
                                 <?php if ($disponibles > 0): ?>
                                     <span class="status-tag status-available">
-                                        <svg class="icon"><use href="#i-circle-check" /></svg> Disponible
+                                        <svg class="icon"><use href="#i-circle-check" /></svg> Disponible (<?= $disponibles ?> <?= $disponibles === 1 ? 'ejemplar' : 'ejemplares' ?>)
                                     </span>
                                 <?php else: ?>
                                     <span class="status-tag status-unavailable">
-                                        <svg class="icon"><use href="#i-circle-x" /></svg> No disponible
+                                        <svg class="icon"><use href="#i-circle-x" /></svg> No disponible (0 ejemplares)
                                     </span>
                                 <?php endif; ?>
-                                <span><strong><?= $disponibles ?></strong> ejemplares disponibles</span>
                             </div>
 
-                            <a href="catalogo.php" class="btn btn-header">
-                                <svg class="icon"><use href="#i-arrow-left" /></svg> Volver al catálogo
-                            </a>
-                            <p class="mt-3 mb-0">Las reservas se hacen desde la app móvil con tu cuenta.</p>
+                            <h1 class="detail-title"><?= htmlspecialchars($libro['titulo_libro']) ?></h1>
+                            <p class="detail-author"><?= htmlspecialchars($autorLibro) ?></p>
+
+                            <div class="detail-divider"></div>
+
+                            <h2 class="section-heading">Sinopsis</h2>
+                            <p class="detail-synopsis mb-3"><?= nl2br(htmlspecialchars(trim($libro['sinopsis'] ?? '') !== '' ? $libro['sinopsis'] : 'Sin sinopsis disponible.')) ?></p>
+
+                            <p class="app-notice mb-0">
+                                <svg class="icon"><use href="#i-smartphone" /></svg>
+                                <span>Las reservas de ejemplares disponibles se realizan desde la app móvil con tu cuenta.</span>
+                            </p>
                         </div>
                     </div>
-                </div>
-            </section>
+                </section>
 
-            <section class="py-5">
-                <div class="container">
-                    <div class="row g-4">
-                        <div class="col-lg-8">
-                            <h2 class="section-heading">Sinopsis</h2>
-                            <p class="mb-4"><?= nl2br(htmlspecialchars($libro['sinopsis'] ?? 'Sin sinopsis disponible.')) ?></p>
-
-                            <div class="info-card">
-                                <h2>Datos bibliográficos</h2>
-                                <div class="row g-3">
-                                    <div class="col-sm-6">
-                                        <span class="text-secondary d-block small">Editorial</span>
-                                        <strong><?= htmlspecialchars($libro['nombre_editorial']) ?></strong>
-                                    </div>
-                                    <div class="col-sm-6">
-                                        <span class="text-secondary d-block small">Idioma</span>
-                                        <strong><?= htmlspecialchars($libro['nombre_idioma']) ?></strong>
-                                    </div>
-                                    <div class="col-sm-6">
-                                        <span class="text-secondary d-block small">Páginas</span>
-                                        <strong><?= $libro['paginas'] ? (int)$libro['paginas'] : 'No especificado' ?></strong>
-                                    </div>
-                                    <div class="col-sm-6">
-                                        <span class="text-secondary d-block small">ISBN</span>
-                                        <strong><?= htmlspecialchars($libro['ISBN']) ?></strong>
-                                    </div>
+                <div class="row g-4">
+                    <div class="col-lg-7">
+                        <div class="info-card h-100">
+                            <h2>Datos bibliográficos</h2>
+                            <div class="row g-3">
+                                <div class="col-sm-6">
+                                    <span class="text-secondary d-block small">Editorial</span>
+                                    <strong><?= htmlspecialchars($libro['nombre_editorial']) ?></strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-secondary d-block small">Idioma</span>
+                                    <strong><?= htmlspecialchars($libro['nombre_idioma']) ?></strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-secondary d-block small">Páginas</span>
+                                    <strong><?= $libro['paginas'] ? (int)$libro['paginas'] : 'No especificado' ?></strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-secondary d-block small">ISBN</span>
+                                    <strong><?= htmlspecialchars($libro['ISBN']) ?></strong>
                                 </div>
                             </div>
                         </div>
+                    </div>
 
-                        <div class="col-lg-4">
-                            <div class="info-card">
-                                <h2>Antes de reservar</h2>
-                                <ul class="info-list">
-                                    <li>
-                                        <svg class="icon"><use href="#i-smartphone" /></svg>
-                                        <span>La reserva se hace desde la app móvil, con la cuenta que creaste en esta página web.</span>
-                                    </li>
-                                    <li>
-                                        <svg class="icon"><use href="#i-clock" /></svg>
-                                        <span>Tienes un plazo para recoger el libro en la biblioteca. Si no lo recoges a tiempo, la reserva expira.</span>
-                                    </li>
-                                    <li>
-                                        <svg class="icon"><use href="#i-library" /></svg>
-                                        <span>Puedes tener hasta 3 libros al mismo tiempo.</span>
-                                    </li>
-                                    <li>
-                                        <svg class="icon"><use href="#i-triangle-alert" /></svg>
-                                        <span>Retraso en la devolución: adeudo de \$10 por día.</span>
-                                    </li>
-                                </ul>
-                            </div>
+                    <div class="col-lg-5">
+                        <div class="info-card h-100">
+                            <h2>Antes de reservar</h2>
+                            <ul class="info-list">
+                                <li>
+                                    <svg class="icon"><use href="#i-clock" /></svg>
+                                    <span>Tienes un plazo límite para recoger el ejemplar en mostrador antes de que expire la reserva.</span>
+                                </li>
+                                <li>
+                                    <svg class="icon"><use href="#i-library" /></svg>
+                                    <span>Puedes tener hasta <?= $maxLibros ?> libros prestados al mismo tiempo.</span>
+                                </li>
+                                <li class="mb-0">
+                                    <svg class="icon"><use href="#i-triangle-alert" /></svg>
+                                    <span>Retraso en la devolución: adeudo de $<?= number_format($multaDiaria, 0) ?> por día.</span>
+                                </li>
+                            </ul>
                         </div>
                     </div>
                 </div>
-            </section>
+            </div>
         </main>
 
         <?php include "includes/footer.php"; ?>

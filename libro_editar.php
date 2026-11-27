@@ -11,6 +11,7 @@ require_once __DIR__ . '/config/conexion.php';
 $pagina_activa = "inventario_libros.php";
 $error         = '';
 $idLibro       = $_GET['id'] ?? $_POST['id_libro'] ?? null;
+$patronIsbn    = '/^(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]$/';
 
 if (!$idLibro || !is_numeric($idLibro)) {
     header('Location: inventario_libros.php');
@@ -20,19 +21,32 @@ $idLibroInt = (int)$idLibro;
 
 // Procesa la actualización (UPDATE) cuando el formulario se envía por POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $titulo      = trim($_POST['titulo_libro'] ?? '');
-    $isbn        = trim($_POST['isbn'] ?? '');
-    $paginas     = trim($_POST['paginas'] ?? '');
-    $idCategoria = (int)($_POST['id_categoria'] ?? 0);
-    $idEditorial = (int)($_POST['id_editorial'] ?? 0);
-    $idIdioma    = (int)($_POST['id_idioma'] ?? 0);
-    $idAutor     = (int)($_POST['id_autor'] ?? 0);
-    $sinopsis    = trim($_POST['sinopsis'] ?? '');
-    $publicado   = isset($_POST['publicado']) ? 1 : 0;
-    $portada     = $_FILES['portada'] ?? null;
+    $titulo           = trim($_POST['titulo_libro'] ?? '');
+    $isbn             = trim($_POST['isbn'] ?? '');
+    $paginas          = trim($_POST['paginas'] ?? '');
+    $idCategoria      = (int)($_POST['id_categoria'] ?? 0);
+    $idEditorial      = (int)($_POST['id_editorial'] ?? 0);
+    $idIdioma         = (int)($_POST['id_idioma'] ?? 0);
+    $sinopsis         = trim($_POST['sinopsis'] ?? '');
+    $publicado        = isset($_POST['publicado']) ? 1 : 0;
+    $portada          = $_FILES['portada'] ?? null;
+    $autoresRecibidos = $_POST['autores'] ?? [];
 
-    if (empty($titulo) || empty($isbn) || $idCategoria <= 0 || $idEditorial <= 0 || $idIdioma <= 0 || $idAutor <= 0) {
+    // Limpia la lista de autores recibidos evitando repetidos
+    $autoresLimpios = [];
+    if (is_array($autoresRecibidos)) {
+        foreach ($autoresRecibidos as $idAut) {
+            $idAutInt = (int)$idAut;
+            if ($idAutInt > 0 && !in_array($idAutInt, $autoresLimpios)) {
+                $autoresLimpios[] = $idAutInt;
+            }
+        }
+    }
+
+    if (empty($titulo) || empty($isbn) || $idCategoria <= 0 || $idEditorial <= 0 || $idIdioma <= 0 || count($autoresLimpios) === 0) {
         $error = 'Todos los campos obligatorios deben completarse.';
+    } elseif (!preg_match($patronIsbn, $isbn)) {
+        $error = 'Ingresa un código ISBN-10 o ISBN-13 válido.';
     } elseif ($paginas !== '' && (!is_numeric($paginas) || (int)$paginas <= 0)) {
         $error = 'El número de páginas debe ser mayor a 0.';
     } else {
@@ -100,7 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // Actualiza los datos en tbllibros, tbllibro_autor y tblpublicacion_catalogo
+    // Actualiza los datos en tbllibros, reemplaza los autores en tbllibro_autor y actualiza publicación
     if (empty($error)) {
         $paginasInt = ($paginas !== '') ? (int)$paginas : null;
         $sqlUpd     = "UPDATE tbllibros SET id_editorial = ?, id_categoria = ?, id_idioma = ?, titulo_libro = ?, paginas = ?, ISBN = ? WHERE id_libro = ?";
@@ -117,8 +131,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 mysqli_stmt_close($stmtDelAut);
 
                 $stmtInsAut = mysqli_prepare($conexion, "INSERT INTO tbllibro_autor (id_libro, id_autor) VALUES (?, ?)");
-                mysqli_stmt_bind_param($stmtInsAut, "ii", $idLibroInt, $idAutor);
-                mysqli_stmt_execute($stmtInsAut);
+                foreach ($autoresLimpios as $idAutorGuardar) {
+                    mysqli_stmt_bind_param($stmtInsAut, "ii", $idLibroInt, $idAutorGuardar);
+                    mysqli_stmt_execute($stmtInsAut);
+                }
                 mysqli_stmt_close($stmtInsAut);
 
                 $stmtExistePub = mysqli_prepare($conexion, "SELECT id_libro FROM tblpublicacion_catalogo WHERE id_libro = ?");
@@ -150,8 +166,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Consulta los datos actuales del libro para precargar el formulario de edición
-$sqlActual = "SELECT l.*, pc.portada, pc.sinopsis, COALESCE(pc.publicado, 0) AS publicado,
-              (SELECT la.id_autor FROM tbllibro_autor la WHERE la.id_libro = l.id_libro LIMIT 1) AS id_autor
+$sqlActual = "SELECT l.*, pc.portada, pc.sinopsis, COALESCE(pc.publicado, 0) AS publicado
               FROM tbllibros l
               LEFT JOIN tblpublicacion_catalogo pc ON pc.id_libro = l.id_libro
               WHERE l.id_libro = ? AND l.estado = 'Activo'";
@@ -167,6 +182,24 @@ if (!$libro) {
     exit;
 }
 
+// Obtiene todos los autores que tiene asignados este libro actualmente
+$autoresActuales = [];
+$stmtAutAct      = mysqli_prepare($conexion, "SELECT id_autor FROM tbllibro_autor WHERE id_libro = ? ORDER BY id_autor ASC");
+mysqli_stmt_bind_param($stmtAutAct, "i", $idLibroInt);
+mysqli_stmt_execute($stmtAutAct);
+$resAutAct = mysqli_stmt_get_result($stmtAutAct);
+while ($filaAutAct = mysqli_fetch_assoc($resAutAct)) {
+    $autoresActuales[] = (int)$filaAutAct['id_autor'];
+}
+mysqli_stmt_close($stmtAutAct);
+if (count($autoresActuales) === 0) {
+    $autoresActuales = [0];
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['autores']) && is_array($_POST['autores'])) {
+    $autoresActuales = array_map('intval', $_POST['autores']);
+}
+
 // Prepara el buscador rápido por categoría en la parte superior para cambiar de libro fácilmente
 $catFiltro = (isset($_GET['cat_filtro']) && is_numeric($_GET['cat_filtro'])) ? (int)$_GET['cat_filtro'] : (int)$libro['id_categoria'];
 $sqlRapida = "SELECT id_libro, titulo_libro FROM tbllibros WHERE estado = 'Activo' AND id_categoria = ? ORDER BY titulo_libro ASC";
@@ -180,6 +213,13 @@ $resCategorias       = mysqli_query($conexion, "SELECT id_categoria, nombre FROM
 $resEditoriales      = mysqli_query($conexion, "SELECT id_editorial, nombre_editorial FROM tbleditoriales ORDER BY nombre_editorial ASC");
 $resIdiomas          = mysqli_query($conexion, "SELECT id_idioma, nombre_idioma FROM tblidiomas ORDER BY nombre_idioma ASC");
 $resAutores          = mysqli_query($conexion, "SELECT id_autor, CONCAT_WS(' ', nombre, apellido_paterno, apellido_materno) AS nombre_completo FROM tblautores ORDER BY nombre ASC");
+
+$listaAutores = [];
+if ($resAutores) {
+    while ($filaAut = mysqli_fetch_assoc($resAutores)) {
+        $listaAutores[] = $filaAut;
+    }
+}
 
 $nombrePortada = str_replace('libro_', 'libro', $libro['portada'] ?? '');
 $rutaPortada   = ($nombrePortada !== '') ? $dirPortadas . $nombrePortada : '';
@@ -197,7 +237,7 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
         <link rel="stylesheet" href="./css/bootstrap.min.css" />
         <link rel="stylesheet" href="./css/estilos.css" />
-        <link rel="stylesheet" href="./css/bibliotecario.css" />
+        <link rel="stylesheet" href="./css/bibliotecario.css?v=2" />
     </head>
 
     <body>
@@ -212,14 +252,14 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
                     <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
                         <div>
                             <h1 class="page-title">Editar libro (ID: <?= $libro['id_libro'] ?>)</h1>
-                            <p class="page-subtitle mb-0">Modifica los datos generales o cambia rápido de título filtrando por categoría.</p>
+                            <p class="page-subtitle mb-0">Actualiza los datos, autores o publicación, o cambia rápido de título filtrando por categoría.</p>
                         </div>
                         <a href="inventario_libros.php" class="btn btn-outline-brand">
                             <svg class="icon"><use href="#i-arrow-left" /></svg> Volver al inventario
                         </a>
                     </div>
 
-                    <div class="panel p-3 mb-4">
+                    <div class="panel p-4 mb-4">
                         <div class="row g-3 align-items-end">
                             <div class="col-md-5">
                                 <form method="GET" action="libro_editar.php">
@@ -256,51 +296,101 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
                     </div>
 
                     <?php if ($error): ?>
-                        <div class="alert alert-danger py-2"><?= htmlspecialchars($error) ?></div>
+                        <div class="alert alert-danger py-2 mb-4"><?= htmlspecialchars($error) ?></div>
                     <?php endif; ?>
 
-                    <form id="formLibro" method="POST" action="" enctype="multipart/form-data" novalidate>
+                    <form id="formLibro" method="POST" action="" enctype="multipart/form-data" novalidate class="form-libro-spacious">
                         <input type="hidden" name="id_libro" value="<?= $libro['id_libro'] ?>" />
 
-                        <section class="panel p-4 mb-4">
-                            <h2 class="h5 fw-semibold section-green-title mb-3">1. Datos generales del libro</h2>
+                        <section class="panel p-4 p-lg-5 mb-4">
+                            <div class="mb-4">
+                                <h2 class="h5 fw-semibold section-green-title mb-1">1. Identificación y autores</h2>
+                                <p class="small text-secondary mb-0">Modifica el título, el código ISBN o añade y quita coautores del libro.</p>
+                            </div>
 
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-8">
+                            <div class="row g-4 mb-4">
+                                <div class="col-lg-7">
                                     <label for="titulo_libro" class="form-label fw-medium">Título del libro *</label>
                                     <input type="text" name="titulo_libro" id="titulo_libro" class="form-control" value="<?= htmlspecialchars($_POST['titulo_libro'] ?? $libro['titulo_libro']) ?>" />
                                     <div id="feedback-titulo" class="invalid-feedback"></div>
                                 </div>
 
-                                <div class="col-md-4">
-                                    <label for="isbn" class="form-label fw-medium">ISBN *</label>
-                                    <input type="text" name="isbn" id="isbn" class="form-control" value="<?= htmlspecialchars($_POST['isbn'] ?? $libro['ISBN']) ?>" />
+                                <div class="col-lg-5">
+                                    <label for="isbn" class="form-label fw-medium">Código ISBN *</label>
+                                    <input
+                                        type="text"
+                                        name="isbn"
+                                        id="isbn"
+                                        class="form-control"
+                                        pattern="^(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]$"
+                                        placeholder="Ej. 978-3-16-148410-0 o 0-306-40615-2"
+                                        title="Ingresa un ISBN-10 o ISBN-13 válido"
+                                        value="<?= htmlspecialchars($_POST['isbn'] ?? $libro['ISBN']) ?>"
+                                        required
+                                    />
                                     <div id="feedback-isbn" class="invalid-feedback"></div>
                                 </div>
                             </div>
 
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-4">
-                                    <div class="d-flex justify-content-between align-items-center mb-1">
-                                        <label for="id_autor" class="form-label fw-medium mb-0">Autor *</label>
-                                        <a href="autores.php" class="small text-decoration-none section-green-title fw-medium">+ Agregar autor</a>
+                            <div>
+                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                                    <label class="form-label fw-medium mb-0">Autor(es) del libro *</label>
+                                    <a href="autores.php" class="link-add-catalog">+ Registrar nuevo autor</a>
+                                </div>
+
+                                <div id="contenedor-autores">
+                                    <?php foreach ($autoresActuales as $indice => $autorSel): ?>
+                                        <div class="fila-autor d-flex gap-2 <?= $indice > 0 ? 'mt-2' : '' ?>">
+                                            <select name="autores[]" class="form-select select-autor">
+                                                <option value="0">Selecciona un autor</option>
+                                                <?php foreach ($listaAutores as $aut): ?>
+                                                    <option value="<?= $aut['id_autor'] ?>" <?= $autorSel === (int)$aut['id_autor'] ? 'selected' : '' ?>>
+                                                        <?= htmlspecialchars($aut['nombre_completo']) ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                            <?php if ($indice > 0): ?>
+                                                <button type="button" class="btn btn-danger-soft btn-quitar-autor">Quitar</button>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <div id="feedback-autor" class="invalid-feedback d-block"></div>
+
+                                <button type="button" id="btnAgregarAutor" class="btn btn-outline-brand btn-sm mt-2">
+                                    <svg class="icon"><use href="#i-plus" /></svg> Añadir otro autor al libro
+                                </button>
+                            </div>
+                        </section>
+
+                        <section class="panel p-4 p-lg-5 mb-4">
+                            <div class="mb-4">
+                                <h2 class="h5 fw-semibold section-green-title mb-1">2. Clasificación bibliográfica</h2>
+                                <p class="small text-secondary mb-0">Actualiza la categoría, editorial, idioma o el número de páginas.</p>
+                            </div>
+
+                            <div class="row g-4 mb-4">
+                                <div class="col-md-6">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <label for="id_categoria" class="form-label fw-medium mb-0">Categoría *</label>
+                                        <a href="categorias.php" class="link-add-catalog">+ Nueva categoría</a>
                                     </div>
-                                    <?php $autorSel = (int)($_POST['id_autor'] ?? $libro['id_autor']); ?>
-                                    <select name="id_autor" id="id_autor" class="form-select">
-                                        <option value="0">Selecciona un autor</option>
-                                        <?php while ($aut = mysqli_fetch_assoc($resAutores)): ?>
-                                            <option value="<?= $aut['id_autor'] ?>" <?= $autorSel === (int)$aut['id_autor'] ? 'selected' : '' ?>>
-                                                <?= htmlspecialchars($aut['nombre_completo']) ?>
+                                    <?php $catSel = (int)($_POST['id_categoria'] ?? $libro['id_categoria']); ?>
+                                    <select name="id_categoria" id="id_categoria" class="form-select">
+                                        <option value="0">Selecciona una categoría</option>
+                                        <?php while ($cat = mysqli_fetch_assoc($resCategorias)): ?>
+                                            <option value="<?= $cat['id_categoria'] ?>" <?= $catSel === (int)$cat['id_categoria'] ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($cat['nombre']) ?>
                                             </option>
                                         <?php endwhile; ?>
                                     </select>
-                                    <div id="feedback-autor" class="invalid-feedback"></div>
+                                    <div id="feedback-categoria" class="invalid-feedback"></div>
                                 </div>
 
-                                <div class="col-md-4">
-                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                <div class="col-md-6">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
                                         <label for="id_editorial" class="form-label fw-medium mb-0">Editorial *</label>
-                                        <a href="editoriales.php" class="small text-decoration-none section-green-title fw-medium">+ Agregar editorial</a>
+                                        <a href="editoriales.php" class="link-add-catalog">+ Nueva editorial</a>
                                     </div>
                                     <?php $edSel = (int)($_POST['id_editorial'] ?? $libro['id_editorial']); ?>
                                     <select name="id_editorial" id="id_editorial" class="form-select">
@@ -313,25 +403,14 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
                                     </select>
                                     <div id="feedback-editorial" class="invalid-feedback"></div>
                                 </div>
-
-                                <div class="col-md-4">
-                                    <label for="id_categoria" class="form-label fw-medium mb-1">Categoría *</label>
-                                    <?php $catSel = (int)($_POST['id_categoria'] ?? $libro['id_categoria']); ?>
-                                    <select name="id_categoria" id="id_categoria" class="form-select">
-                                        <option value="0">Selecciona una categoría</option>
-                                        <?php while ($cat = mysqli_fetch_assoc($resCategorias)): ?>
-                                            <option value="<?= $cat['id_categoria'] ?>" <?= $catSel === (int)$cat['id_categoria'] ? 'selected' : '' ?>>
-                                                <?= htmlspecialchars($cat['nombre']) ?>
-                                            </option>
-                                        <?php endwhile; ?>
-                                    </select>
-                                    <div id="feedback-categoria" class="invalid-feedback"></div>
-                                </div>
                             </div>
 
-                            <div class="row g-3">
+                            <div class="row g-4">
                                 <div class="col-md-6">
-                                    <label for="id_idioma" class="form-label fw-medium">Idioma *</label>
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <label for="id_idioma" class="form-label fw-medium mb-0">Idioma *</label>
+                                        <a href="idiomas.php" class="link-add-catalog">+ Nuevo idioma</a>
+                                    </div>
                                     <?php $idmSel = (int)($_POST['id_idioma'] ?? $libro['id_idioma']); ?>
                                     <select name="id_idioma" id="id_idioma" class="form-select">
                                         <option value="0">Selecciona un idioma</option>
@@ -345,16 +424,19 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
                                 </div>
 
                                 <div class="col-md-6">
-                                    <label for="paginas" class="form-label fw-medium">Páginas</label>
+                                    <label for="paginas" class="form-label fw-medium mb-2">Número de páginas</label>
                                     <input type="number" min="1" name="paginas" id="paginas" class="form-control" value="<?= htmlspecialchars($_POST['paginas'] ?? ($libro['paginas'] ?? '')) ?>" />
                                     <div id="feedback-paginas" class="invalid-feedback"></div>
                                 </div>
                             </div>
                         </section>
 
-                        <section class="panel p-4">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h2 class="h5 fw-semibold section-green-title mb-0">2. Publicación en catálogo</h2>
+                        <section class="panel p-4 p-lg-5">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+                                <div>
+                                    <h2 class="h5 fw-semibold section-green-title mb-1">3. Publicación en catálogo</h2>
+                                    <p class="small text-secondary mb-0">Cambia la portada o edita la sinopsis pública del ejemplar.</p>
+                                </div>
                                 <?php if ((int)$libro['publicado'] === 1): ?>
                                     <span class="tag tag-ok"><svg class="icon"><use href="#i-circle-check" /></svg> Publicado</span>
                                 <?php else: ?>
@@ -363,7 +445,7 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
                             </div>
 
                             <div class="row g-4">
-                                <div class="col-md-5">
+                                <div class="col-lg-6">
                                     <div class="d-flex gap-3 align-items-center">
                                         <?php if ($tienePortada): ?>
                                             <img src="<?= htmlspecialchars($urlPortadas . $nombrePortada) ?>" alt="Portada actual" class="cover-mini" />
@@ -376,19 +458,19 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
                                         <div class="flex-grow-1">
                                             <label for="portada" class="form-label fw-medium">Reemplazar portada</label>
                                             <input type="file" name="portada" id="portada" class="form-control" accept="image/jpeg, image/png, image/webp" />
-                                            <div class="form-text">JPG, PNG o WEBP hasta 2 MB.</div>
+                                            <div class="form-text mt-2">JPG, PNG o WEBP hasta 2 MB.</div>
                                         </div>
                                     </div>
                                 </div>
 
-                                <div class="col-md-7">
+                                <div class="col-lg-6">
                                     <label for="sinopsis" class="form-label fw-medium">Sinopsis</label>
-                                    <textarea name="sinopsis" id="sinopsis" rows="3" maxlength="1000" class="form-control" placeholder="Escribe brevemente de qué trata el libro"><?= htmlspecialchars($_POST['sinopsis'] ?? ($libro['sinopsis'] ?? '')) ?></textarea>
+                                    <textarea name="sinopsis" id="sinopsis" rows="4" maxlength="1000" class="form-control" placeholder="Escribe brevemente de qué trata el libro"><?= htmlspecialchars($_POST['sinopsis'] ?? ($libro['sinopsis'] ?? '')) ?></textarea>
                                     <p id="contador-sinopsis" class="small text-secondary text-end mt-1 mb-0">0 / 1,000 caracteres</p>
                                 </div>
                             </div>
 
-                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 pt-3 mt-3 border-top">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 pt-4 mt-4 border-top">
                                 <div class="form-check mb-0">
                                     <?php
                                     $esPublicado = ($_SERVER['REQUEST_METHOD'] === 'POST') ? isset($_POST['publicado']) : ((int)$libro['publicado'] === 1);
@@ -410,5 +492,6 @@ $tienePortada  = ($rutaPortada !== '' && file_exists($rutaPortada));
         <script src="./js/ver_password.js"></script>
         <script src="./js/validar_libro.js"></script>
         <script src="./js/bootstrap.bundle.min.js"></script>
+        <script src="./js/validar_libro.js?v=2"></script>
     </body>
 </html>
