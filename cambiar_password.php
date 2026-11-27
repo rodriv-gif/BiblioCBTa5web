@@ -6,7 +6,7 @@
 // No lleva token CSRF porque pide la contraseña actual: sin ella, un formulario falso no puede cambiar nada.
 
 require "includes/sesion.php";
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php"; // también carga bd.php y utiles.php
 
 $es_lector = es_lector();
@@ -44,7 +44,7 @@ if ($es_lector) {
     $id = (int) $_SESSION["id_bibliotecario"];
 }
 
-$guardada = consultar_valor($pdo, "SELECT contrasenia FROM $tabla WHERE $campo_id = ?", [$id]);
+$guardada = consultar_valor($conexion, "SELECT contrasenia FROM $tabla WHERE $campo_id = ?", [$id]);
 
 // Igual que el login: se acepta la contraseña con hash o la vieja en texto plano
 $actual_correcta = $guardada !== 0 && $guardada !== "" && (password_verify($actual, $guardada) || $actual === $guardada);
@@ -59,14 +59,14 @@ if (!$actual_correcta) {
     flash_poner("error", "La contraseña nueva debe ser distinta de la actual.", true);
 } else {
     $hash = password_hash($nueva, PASSWORD_DEFAULT);
-    $cambiadas = ejecutar($pdo, "UPDATE $tabla SET contrasenia = ? WHERE $campo_id = ?", [$hash, $id]);
+    $cambiadas = ejecutar($conexion, "UPDATE $tabla SET contrasenia = ? WHERE $campo_id = ?", [$hash, $id]);
 
     // Se vuelve a leer para confirmar que de verdad quedó guardada (la columna podría ser muy corta para el hash)
-    $quedo = consultar_valor($pdo, "SELECT contrasenia FROM $tabla WHERE $campo_id = ?", [$id]);
+    $quedo = consultar_valor($conexion, "SELECT contrasenia FROM $tabla WHERE $campo_id = ?", [$id]);
 
     if ($cambiadas === false || !password_verify($nueva, (string) $quedo)) {
         // Si no quedó bien, se regresa la contraseña anterior para no dejar la cuenta inservible
-        ejecutar($pdo, "UPDATE $tabla SET contrasenia = ? WHERE $campo_id = ?", [$guardada, $id]);
+        ejecutar($conexion, "UPDATE $tabla SET contrasenia = ? WHERE $campo_id = ?", [$guardada, $id]);
         flash_poner("error", "No se pudo guardar la contraseña. Intenta más tarde.", true);
     } else {
         flash_poner("ok", "Tu contraseña se cambió correctamente.");

@@ -1,7 +1,7 @@
 <?php
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 $pagina_activa = "mi_cuenta.php";
 $titulo = "Mis avisos";
@@ -9,7 +9,7 @@ $subtitulo = "Del más reciente al más antiguo.";
 $icono = "i-bell";
 
 // Avisos de la biblioteca (tblavisos) y los armados con tus préstamos y reservas
-$avisos = avisos_del_lector($pdo);
+$avisos = avisos_del_lector($conexion);
 
 // Solo los de tblavisos se pueden marcar como leídos
 $sin_leer = 0;

@@ -1,17 +1,17 @@
 <?php
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 $pagina_activa = "mi_cuenta.php";
 
 // Datos de las tarjetas de resumen
-$prestamos = prestamos_del_lector($pdo);
-$reservas = reservas_del_lector($pdo);
-[$adeudos, $resumen_adeudos] = adeudos_del_lector($pdo);
+$prestamos = prestamos_del_lector($conexion);
+$reservas = reservas_del_lector($conexion);
+[$adeudos, $resumen_adeudos] = adeudos_del_lector($conexion);
 $total_multas = $resumen_adeudos["total"];
-$avisos_nuevos = contar_avisos_nuevos($pdo);
-$carrera = carrera_del_lector($pdo);
+$avisos_nuevos = contar_avisos_nuevos($conexion);
+$carrera = carrera_del_lector($conexion);
 
 // Préstamos vencidos (los que ya pasaron su fecha de devolución)
 $vencidos = 0;

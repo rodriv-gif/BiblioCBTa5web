@@ -58,14 +58,14 @@ function tipo_de_lector()
 }
 
 // Nombre completo del lector (en la sesión solo está el nombre de pila)
-function nombre_completo_del_lector($pdo)
+function nombre_completo_del_lector($conexion)
 {
     $matricula = $_SESSION["matricula"] ?? "";
 
     if ($matricula !== "" && $matricula !== null) {
-        $fila = consultar_una($pdo, "SELECT nombre, apellido_paterno, apellido_materno FROM tblalumnos WHERE matricula = ?", [$matricula], false);
+        $fila = consultar_una($conexion, "SELECT nombre, apellido_paterno, apellido_materno FROM tblalumnos WHERE matricula = ?", [$matricula], false);
     } else {
-        $fila = consultar_una($pdo, "SELECT nombre, apellido_paterno, apellido_materno FROM tbltrabajadores WHERE numero_control = ?", [$_SESSION["numero_control"] ?? 0], false);
+        $fila = consultar_una($conexion, "SELECT nombre, apellido_paterno, apellido_materno FROM tbltrabajadores WHERE numero_control = ?", [$_SESSION["numero_control"] ?? 0], false);
     }
 
     if (!$fila) {
@@ -77,7 +77,7 @@ function nombre_completo_del_lector($pdo)
 
 // Carrera del alumno: tblalumnos guarda el id_carrera y el nombre está en tblcarreras.
 // Si no se encuentra, regresa "" (y Mi cuenta muestra solo Alumno / Trabajador).
-function carrera_del_lector($pdo)
+function carrera_del_lector($conexion)
 {
     $matricula = $_SESSION["matricula"] ?? "";
 
@@ -85,10 +85,10 @@ function carrera_del_lector($pdo)
         return "";
     }
 
-    $alumno = consultar_una($pdo, "SELECT * FROM tblalumnos WHERE matricula = ?", [$matricula], false);
+    $alumno = consultar_una($conexion, "SELECT * FROM tblalumnos WHERE matricula = ?", [$matricula], false);
 
     if (!empty($alumno["id_carrera"])) {
-        $nombre = consultar_valor($pdo, "SELECT nombre_carrera FROM tblcarreras WHERE id_carrera = ?", [$alumno["id_carrera"]], false);
+        $nombre = consultar_valor($conexion, "SELECT nombre_carrera FROM tblcarreras WHERE id_carrera = ?", [$alumno["id_carrera"]], false);
 
         if (!empty($nombre)) {
             return (string) $nombre;
@@ -108,12 +108,12 @@ function carrera_del_lector($pdo)
 // ---------- Préstamos ----------
 
 // Préstamos en curso del lector, del que vence primero al que vence después
-function prestamos_del_lector($pdo)
+function prestamos_del_lector($conexion)
 {
     [$condicion, $parametros] = condicion_lector("p");
 
     $filas = consultar(
-        $pdo,
+        $conexion,
         "SELECT p.id_prestamo, p.fecha_prestamo, p.fecha_devolucion, e.inventario, l.titulo_libro
          FROM tblprestamos p
          INNER JOIN tblejemplares e ON e.id_ejemplar = p.id_ejemplar
@@ -129,13 +129,13 @@ function prestamos_del_lector($pdo)
 // ---------- Reservas ----------
 
 // Reservas Activas del lector que todavía no vencen
-function reservas_del_lector($pdo)
+function reservas_del_lector($conexion)
 {
     [$condicion, $parametros] = condicion_lector("r");
     $parametros[] = date("Y-m-d H:i:s");
 
     return consultar(
-        $pdo,
+        $conexion,
         "SELECT r.id_reserva, r.folio, r.fecha_reserva, r.fecha_limite, e.inventario, l.titulo_libro
          FROM tblreservas r
          INNER JOIN tblejemplares e ON e.id_ejemplar = r.id_ejemplar
@@ -147,14 +147,14 @@ function reservas_del_lector($pdo)
 }
 
 // Una reserva Activa de este lector (para el comprobante). Si es de otra persona regresa null.
-function reserva_del_lector($pdo, $id_reserva)
+function reserva_del_lector($conexion, $id_reserva)
 {
     [$condicion, $parametros] = condicion_lector("r");
     array_unshift($parametros, $id_reserva);
     $parametros[] = date("Y-m-d H:i:s");
 
     return consultar_una(
-        $pdo,
+        $conexion,
         "SELECT r.id_reserva, r.folio, r.fecha_reserva, r.fecha_limite,
                 e.id_libro, e.inventario, l.titulo_libro
          FROM tblreservas r
@@ -167,13 +167,13 @@ function reserva_del_lector($pdo, $id_reserva)
 
 // Cancela una reserva Activa del lector. Regresa true si se canceló.
 // Usa el mismo cambio que reserva_cancelar.php del bibliotecario (estado 3), así el ejemplar queda libre.
-function cancelar_reserva_del_lector($pdo, $id_reserva)
+function cancelar_reserva_del_lector($conexion, $id_reserva)
 {
     [$condicion, $parametros] = condicion_lector();
     array_unshift($parametros, $id_reserva);
 
     $cambiadas = ejecutar(
-        $pdo,
+        $conexion,
         "UPDATE tblreservas SET id_estado_reserva = " . RESERVA_CANCELADA . "
          WHERE id_reserva = ? AND $condicion AND id_estado_reserva = " . RESERVA_ACTIVA,
         $parametros
@@ -183,10 +183,10 @@ function cancelar_reserva_del_lector($pdo, $id_reserva)
 }
 
 // Autores de un libro, separados por coma ("" si no tiene)
-function autores_del_libro($pdo, $id_libro)
+function autores_del_libro($conexion, $id_libro)
 {
     $filas = consultar(
-        $pdo,
+        $conexion,
         "SELECT a.nombre, a.apellido_paterno, a.apellido_materno
          FROM tbllibro_autor la
          INNER JOIN tblautores a ON a.id_autor = la.id_autor
@@ -225,12 +225,12 @@ function adeudo_resuelto($estado, $fecha_cumplimiento = null)
 //
 // El resumen trae: total (suma de las multas pendientes), multas (cuántas pendientes),
 // reposiciones (cuántas pendientes) y pendientes (multas + reposiciones).
-function adeudos_del_lector($pdo)
+function adeudos_del_lector($conexion)
 {
     [$condicion, $parametros] = condicion_lector("p");
 
     $multas = consultar(
-        $pdo,
+        $conexion,
         "SELECT m.id_multa, m.id_prestamo, m.monto, m.motivo, m.fecha_pago, m.dias_atrasados, m.estado_pago,
                 e.inventario, l.titulo_libro
          FROM tblmultas m
@@ -243,7 +243,7 @@ function adeudos_del_lector($pdo)
     );
 
     $reposiciones = consultar(
-        $pdo,
+        $conexion,
         "SELECT r.id_reposicion, r.motivo_reposicion, r.fecha_reporte, r.estado_reposicion, r.fecha_cumplimiento,
                 e.inventario, l.titulo_libro
          FROM tblreposiciones r
@@ -315,7 +315,7 @@ function adeudos_del_lector($pdo)
 
     // Préstamos vencidos que siguen sin devolverse: todavía no tienen multa registrada,
     // así que se muestra la que llevan acumulada hasta ahora
-    foreach (prestamos_del_lector($pdo) as $p) {
+    foreach (prestamos_del_lector($conexion) as $p) {
         if ($p["vencido"] && empty($con_multa[$p["id_prestamo"]])) {
             $acumulando[] = [
                 "tipo" => "Multa por retraso",
@@ -348,12 +348,12 @@ function adeudos_del_lector($pdo)
 // ---------- Avisos ----------
 
 // Avisos que la biblioteca registró para el lector (tblavisos). "Nuevo" = todavía no leído.
-function avisos_guardados_del_lector($pdo)
+function avisos_guardados_del_lector($conexion)
 {
     [$condicion, $parametros] = condicion_lector("a");
 
     $filas = consultar(
-        $pdo,
+        $conexion,
         "SELECT a.id_aviso, a.mensaje, a.leido, a.fecha_aviso, t.tipo_aviso
          FROM tblavisos a
          LEFT JOIN tbltipo_aviso t ON t.id_tipo_aviso = a.id_tipo_aviso
@@ -379,12 +379,12 @@ function avisos_guardados_del_lector($pdo)
 }
 
 // Marca como leídos todos los avisos guardados del lector. Regresa cuántos cambió (o false si falló).
-function marcar_avisos_leidos($pdo)
+function marcar_avisos_leidos($conexion)
 {
     [$condicion, $parametros] = condicion_lector();
 
     return ejecutar(
-        $pdo,
+        $conexion,
         "UPDATE tblavisos SET leido = 1 WHERE $condicion AND (leido = 0 OR leido IS NULL)",
         $parametros
     );
@@ -393,11 +393,11 @@ function marcar_avisos_leidos($pdo)
 // Avisos del lector, del más reciente al más antiguo: los de tblavisos y los que se arman al momento
 // con sus préstamos y reservas. Cada uno trae: icono, titulo, texto, fecha (Y-m-d H:i:s), nuevo (true/false).
 // "Nuevo" son los que piden atención (vencidos, por vencer) y los guardados que no ha leído.
-function avisos_del_lector($pdo)
+function avisos_del_lector($conexion)
 {
-    $avisos = avisos_guardados_del_lector($pdo);
+    $avisos = avisos_guardados_del_lector($conexion);
 
-    foreach (prestamos_del_lector($pdo) as $p) {
+    foreach (prestamos_del_lector($conexion) as $p) {
         if ($p["vencido"]) {
             $avisos[] = [
                 "icono" => "i-triangle-alert",
@@ -423,7 +423,7 @@ function avisos_del_lector($pdo)
     $parametros[] = date("Y-m-d H:i:s", strtotime("-7 days"));
 
     $reservas = consultar(
-        $pdo,
+        $conexion,
         "SELECT r.id_estado_reserva, r.fecha_reserva, r.fecha_limite, l.titulo_libro
          FROM tblreservas r
          INNER JOIN tblejemplares e ON e.id_ejemplar = r.id_ejemplar
@@ -482,11 +482,11 @@ function avisos_del_lector($pdo)
 }
 
 // Cuántos avisos nuevos tiene (el número rojo de la campana)
-function contar_avisos_nuevos($pdo)
+function contar_avisos_nuevos($conexion)
 {
     $nuevos = 0;
 
-    foreach (avisos_del_lector($pdo) as $aviso) {
+    foreach (avisos_del_lector($conexion) as $aviso) {
         if ($aviso["nuevo"]) {
             $nuevos++;
         }

@@ -1,7 +1,7 @@
 <?php
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 $pagina_activa = "mi_cuenta.php";
 $titulo = "Mis adeudos";
@@ -10,7 +10,7 @@ $icono = "i-triangle-alert";
 
 // Todos los adeudos del lector (tblmultas y tblreposiciones).
 // El total suma solo las multas que siguen pendientes.
-[$adeudos, $resumen] = adeudos_del_lector($pdo);
+[$adeudos, $resumen] = adeudos_del_lector($conexion);
 
 // Filtro de la tabla: todos, pendientes o resueltos
 $ver = $_GET["ver"] ?? "todos";

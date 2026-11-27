@@ -4,12 +4,12 @@
 
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST" || !csrf_valido()) {
     flash_poner("error", "No se pudo marcar los avisos. Intenta de nuevo.");
-} elseif (marcar_avisos_leidos($pdo) === false) {
+} elseif (marcar_avisos_leidos($conexion) === false) {
     flash_poner("error", "No se pudo marcar los avisos. Intenta de nuevo.");
 } else {
     flash_poner("ok", "Tus avisos quedaron marcados como leídos.");
