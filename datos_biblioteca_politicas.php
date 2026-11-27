@@ -1,17 +1,180 @@
 <?php
-require "includes/sesion.php";
+require_once __DIR__ . "/includes/sesion.php";
 exigir_bibliotecario();
-require "config/conexion.php";
+require_once __DIR__ . "/config/conexion.php";
+/** @var mysqli $conexion */
+if (!isset($conexion) || !($conexion instanceof mysqli)) {
+    die("No se pudo establecer la conexión con la base de datos.");
+}
 $pagina_activa = "datos_biblioteca_politicas.php";
+$mensaje = $_SESSION["mensaje_politicas"] ?? "";
+unset($_SESSION["mensaje_politicas"]);
+$error = "";
+$politicas = [];
+$ultimaActualizacion = "Sin registro";
+$revision = "";
+$cargaCorrecta = false;
+$politicasDesdeBD = false;
+$id_bibliotecario = (int) ($_SESSION["id_bibliotecario"] ?? 0);
+if (empty($_SESSION["csrf_politicas"])) {
+    $_SESSION["csrf_politicas"] = bin2hex(random_bytes(32));
+}
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$transaccion = false;
+$sql = "SELECT id_politica, titulo, contenido, orden,
+               actualizado_en, id_bibliotecario
+        FROM tblpoliticas_servicio
+        ORDER BY orden, id_politica";
+try {
+    // Guardar altas, modificaciones y bajas en una sola transacción.
+    if ($_SERVER["REQUEST_METHOD"] === "POST") {
+        $token = $_POST["csrf"] ?? "";
+        $ids = $_POST["politica_id"] ?? [];
+        $titulos = $_POST["politica_titulo"] ?? [];
+        $contenidos = $_POST["politica_contenido"] ?? [];
+        if (!is_string($token) || !hash_equals($_SESSION["csrf_politicas"], $token) || $id_bibliotecario <= 0) {
+            $error = "El formulario o la sesión no son válidos.";
+        } elseif (!is_array($ids) || !is_array($titulos) || !is_array($contenidos) ||
+            count($ids) !== count($titulos) || count($ids) !== count($contenidos) ||
+            count($ids) < 1 || count($ids) > 30) {
+            $error = "Debes guardar entre 1 y 30 secciones completas.";
+        } else {
+            $ids = array_values($ids);
+            $titulos = array_values($titulos);
+            $contenidos = array_values($contenidos);
+            foreach ($ids as $i => $id) {
+                if (!is_string($id) || !ctype_digit($id) || !is_string($titulos[$i]) || !is_string($contenidos[$i])) {
+                    $error = "Los datos del formulario no son válidos.";
+                    break;
+                }
+                $titulos[$i] = trim($titulos[$i]);
+                $contenidos[$i] = trim($contenidos[$i]);
+                if ($titulos[$i] === "" || $contenidos[$i] === "" ||
+                    mb_strlen($titulos[$i], "UTF-8") > 200 || mb_strlen($contenidos[$i], "UTF-8") > 6000) {
+                    $error = "Cada sección debe tener título y contenido dentro de los límites permitidos.";
+                    break;
+                }
+            }
+        }
+        if ($error === "") {
+            mysqli_begin_transaction($conexion);
+            $transaccion = true;
+            $resultado = mysqli_query($conexion, $sql . " FOR UPDATE");
+            $anteriores = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
+            mysqli_free_result($resultado);
+            $revisionRecibida = $_POST["revision"] ?? "";
+            if (!is_string($revisionRecibida) || !hash_equals(hash("sha256", serialize($anteriores)), $revisionRecibida)) {
+                throw new RuntimeException("La lista cambió. Recarga la página antes de guardar.");
+            }
+            $existentes = array_column($anteriores, null, "id_politica");
+            $conservar = [];
+            foreach ($ids as $id) {
+                $id = (int) $id;
+                if ($id > 0) {
+                    if (!isset($existentes[$id]) || isset($conservar[$id])) {
+                        throw new RuntimeException("Identificador de política no válido.");
+                    }
+                    $conservar[$id] = true;
+                }
+            }
+            // Eliminar únicamente los registros retirados del formulario.
+            $eliminar = mysqli_prepare($conexion, "DELETE FROM tblpoliticas_servicio WHERE id_politica = ?");
+            foreach ($existentes as $id => $registro) {
+                if (!isset($conservar[$id])) {
+                    mysqli_stmt_bind_param($eliminar, "i", $id);
+                    mysqli_stmt_execute($eliminar);
+                      }
+            }
+            mysqli_stmt_close($eliminar);
+            $insertar = mysqli_prepare(
+                $conexion,
+                "INSERT INTO tblpoliticas_servicio
+                    (titulo, contenido, orden, actualizado_en, id_bibliotecario)
+                 VALUES (?, ?, ?, NOW(), ?)"
+            );
+            $actualizar = mysqli_prepare(
+                $conexion,
+                "UPDATE tblpoliticas_servicio SET
+                    titulo = ?, contenido = ?, orden = ?,
+                    actualizado_en = NOW(), id_bibliotecario = ?
+                 WHERE id_politica = ?"
+            );
+            foreach ($ids as $i => $id) {
+                $id = (int) $id;
+                $titulo = $titulos[$i];
+                $contenido = $contenidos[$i];
+                $orden = $i + 1;
+                if ($id === 0) {
+                    mysqli_stmt_bind_param(
+                        $insertar, "ssii",
+                        $titulo, $contenido, $orden, $id_bibliotecario
+                    );
+                    mysqli_stmt_execute($insertar);
+                } else {
+                    mysqli_stmt_bind_param(
+                        $actualizar, "ssiii",
+                        $titulo, $contenido, $orden, $id_bibliotecario, $id
+                    );
+                    mysqli_stmt_execute($actualizar);
+                }
+            }
+            mysqli_stmt_close($insertar);
+            mysqli_stmt_close($actualizar);
+            mysqli_commit($conexion);
+            $transaccion = false;
+            $_SESSION["mensaje_politicas"] = "Las políticas se guardaron correctamente.";
+            header("Location: datos_biblioteca_politicas.php");
+            exit;
+        }
+    }
+} catch (Exception $e) {
+    if ($transaccion) {
+        mysqli_rollback($conexion);
+    }
+    $error = $e instanceof mysqli_sql_exception ? "No se pudieron guardar o consultar las políticas." : $e->getMessage();
+}
+// Consultar las políticas reales, sin contenido ficticio.
+try {
+    if (!isset($sql)) {
+        throw new RuntimeException("No se pudo consultar la estructura de la tabla.");
+    }
+    $resultado = mysqli_query($conexion, $sql);
+    $politicas = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
+    mysqli_free_result($resultado);
+    $revision = hash("sha256", serialize($politicas));
+    $cargaCorrecta = true;
+        $politicasDesdeBD = count($politicas) > 0;
+    $ultima = null;
+    foreach ($politicas as $titulo) {
+        if (!empty($titulo["actualizado_en"]) && ($ultima === null || $titulo["actualizado_en"] > $ultima["actualizado_en"])) {
+            $ultima = $titulo;
+        }
+    }
+    if ($ultima !== null) {
+        $ultimaActualizacion = date("d/m/Y, H:i", strtotime($ultima["actualizado_en"]));
+        if (!empty($ultima["id_bibliotecario"])) {
+            $consulta = mysqli_prepare($conexion, "SELECT usuario FROM tblbibliotecario WHERE id_bibliotecario = ?");
+            $responsable = (int) $ultima["id_bibliotecario"];
+            mysqli_stmt_bind_param($consulta, "i", $responsable);
+            mysqli_stmt_execute($consulta);
+            mysqli_stmt_bind_result($consulta, $usuario);
+            if (mysqli_stmt_fetch($consulta)) {
+                $ultimaActualizacion .= " · " . $usuario;
+            }
+            mysqli_stmt_close($consulta);
+        }
+    }
+} catch (Exception $e) {
+    $error = "No se pudo consultar la información de políticas.";
+    $cargaCorrecta = false;
+}
 ?>
 <!doctype html>
 <html lang="es">
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
         <title>Políticas del servicio - Datos de la biblioteca</title>
-
         <!-- Fuente Poppins (guia de estilos) -->
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -19,781 +182,8 @@ $pagina_activa = "datos_biblioteca_politicas.php";
 
         <link rel="stylesheet" href="./css/bootstrap.min.css" />
         <link rel="stylesheet" href="./css/bibliotecario.css" />
-
-        <style>
-            /* Colores de la guia de estilos */
-            :root {
-                --green-main: #0f5132;
-                --green-medium: #2e7d58;
-                --green-dark: #0a3d26;
-                --green-success: #1f6b47;
-                --green-soft: #e6f4ec;
-                --blue-accent: #1e3a8a;
-                --red-alert: #b42318;
-                --red-soft: #fee4e2;
-                --gray-light: #f5f7f6;
-                --text-main: #212121;
-                --text-muted: #4b5563;
-                --border-card: #e5e7eb;
-                --border-field: #d0d5dd;
-            }
-
-            body {
-                font-family: "Poppins", "Segoe UI", Arial, sans-serif;
-                font-size: 14px;
-                line-height: 1.5;
-                color: var(--text-main);
-                background-color: var(--gray-light);
-            }
-
-            .icon {
-                width: 18px;
-                height: 18px;
-                fill: none;
-                stroke: currentColor;
-                stroke-width: 1.75;
-                stroke-linecap: round;
-                stroke-linejoin: round;
-                flex-shrink: 0;
-            }
-
-            .admin-layout {
-                display: flex;
-                min-height: 100vh;
-            }
-
-            /* ---------- Menu lateral ---------- */
-            .sidebar {
-                width: 220px;
-                flex-shrink: 0;
-                background-color: var(--green-main);
-                color: #ffffff;
-                display: flex;
-                flex-direction: column;
-                position: sticky;
-                top: 0;
-                height: 100vh;
-            }
-
-            .sidebar-brand {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 14px 16px;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-                text-decoration: none;
-                color: #ffffff;
-            }
-            .sidebar-brand img {
-                height: 34px;
-                width: auto;
-            }
-            .sidebar-brand .brand-name {
-                font-weight: 600;
-                font-size: 13px;
-                line-height: 1.2;
-                display: block;
-            }
-            .sidebar-brand .brand-sub {
-                font-size: 10px;
-                line-height: 1.2;
-                display: block;
-            }
-
-            .sidebar-menu {
-                list-style: none;
-                margin: 0;
-                padding: 0;
-            }
-            .sidebar-menu a {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                padding: 9px 18px;
-                color: #ffffff;
-                font-size: 13px;
-                line-height: 1.25;
-                text-decoration: none;
-                border-left: 4px solid transparent;
-            }
-            .sidebar-menu a:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-            .sidebar-menu a.active {
-                background-color: var(--green-medium);
-                border-left-color: #ffffff;
-            }
-            .sidebar-menu a:focus-visible {
-                outline: 3px solid #ffffff;
-                outline-offset: -3px;
-            }
-
-            .sidebar-main {
-                flex-grow: 1;
-            }
-
-            .user-card {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                margin: 0 12px 14px 12px;
-                padding: 10px 12px;
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.18);
-                border-radius: 10px;
-            }
-            .user-avatar {
-                width: 32px;
-                height: 32px;
-                border-radius: 50%;
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .user-name {
-                font-size: 12px;
-                line-height: 1.2;
-                font-weight: 500;
-                display: block;
-            }
-            .user-role {
-                font-size: 11px;
-                line-height: 1.2;
-                display: block;
-                margin-top: 2px;
-            }
-
-            .sidebar-bottom {
-                border-top: 1px solid rgba(255, 255, 255, 0.15);
-                padding-top: 4px;
-                margin-bottom: 8px;
-            }
-
-            /* ---------- Contenido ---------- */
-            .admin-main {
-                flex-grow: 1;
-                min-width: 0;
-                padding: 36px 40px;
-            }
-            .admin-content {
-                max-width: 1080px;
-                margin: 0 auto;
-            }
-
-            .page-title {
-                font-size: 28px;
-                font-weight: 600;
-                color: var(--green-main);
-                margin: 0 0 6px 0;
-            }
-            .page-subtitle {
-                color: var(--text-muted);
-                font-size: 14px;
-                margin: 0 0 22px 0;
-            }
-
-            .form-layout {
-                display: grid;
-                grid-template-columns: 1fr 390px;
-                gap: 20px;
-                align-items: start;
-            }
-            .form-column {
-                display: flex;
-                flex-direction: column;
-                gap: 20px;
-            }
-
-            /* tarjetas */
-            .form-card {
-                background-color: #ffffff;
-                border: 1px solid var(--border-card);
-                border-radius: 12px;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-                padding: 22px 24px;
-            }
-
-            .card-header-row {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-bottom: 12px;
-            }
-            .card-header-row.has-subtitle {
-                align-items: flex-start;
-            }
-            .card-icon {
-                width: 30px;
-                height: 30px;
-                border-radius: 50%;
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .card-icon .icon {
-                width: 16px;
-                height: 16px;
-            }
-            .card-title {
-                font-size: 16px;
-                font-weight: 600;
-                margin: 0;
-                line-height: 1.3;
-            }
-            .card-subtitle {
-                font-size: 13px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-
-            /* campos */
-            .field-label {
-                font-size: 13px;
-                font-weight: 500;
-                margin-bottom: 5px;
-                display: block;
-            }
-            .field-label .optional {
-                font-weight: 400;
-                color: var(--text-muted);
-            }
-
-            .form-control {
-                height: 41px;
-                border: 1px solid var(--border-field);
-                border-radius: 8px;
-                font-size: 14px;
-                padding: 0 13px;
-                color: var(--text-main);
-            }
-            textarea.form-control {
-                height: auto;
-                min-height: 80px;
-                padding: 9px 13px;
-                resize: vertical;
-            }
-            .form-control::placeholder {
-                color: #6b7280;
-            }
-            .form-control:focus {
-                border: 2px solid var(--blue-accent);
-                box-shadow: none;
-                padding-left: 11px;
-            }
-            textarea.form-control:focus {
-                padding: 7px 11px;
-            }
-
-            .field-block {
-                margin-bottom: 12px;
-            }
-            .field-block:last-child {
-                margin-bottom: 0;
-            }
-
-            .group-label {
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                color: var(--green-main);
-                margin: 0 0 8px 0;
-            }
-
-            /* interruptor de fin de semana */
-            .toggle-row {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                height: 41px;
-                padding: 0 13px;
-                border: 1px solid var(--border-field);
-                border-radius: 8px;
-                font-size: 14px;
-            }
-            .switch {
-                position: relative;
-                width: 38px;
-                height: 21px;
-                flex-shrink: 0;
-            }
-            .switch input {
-                opacity: 0;
-                width: 100%;
-                height: 100%;
-                position: absolute;
-                inset: 0;
-                margin: 0;
-                cursor: pointer;
-                z-index: 1;
-            }
-            .switch-track {
-                position: absolute;
-                inset: 0;
-                border-radius: 999px;
-                background-color: #d0d5dd;
-                transition: background-color 0.15s;
-            }
-            .switch-track::after {
-                content: "";
-                position: absolute;
-                top: 3px;
-                left: 3px;
-                width: 15px;
-                height: 15px;
-                border-radius: 50%;
-                background-color: #ffffff;
-                transition: transform 0.15s;
-            }
-            .switch input:checked + .switch-track {
-                background-color: var(--green-main);
-            }
-            .switch input:checked + .switch-track::after {
-                transform: translateX(17px);
-            }
-            .switch input:focus-visible + .switch-track {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-
-            .help-text {
-                display: flex;
-                align-items: flex-start;
-                gap: 8px;
-                color: var(--text-muted);
-                font-size: 12px;
-                margin: 10px 0 0 0;
-                line-height: 1.45;
-            }
-            .help-text .icon {
-                width: 13px;
-                height: 13px;
-                margin-top: 2px;
-            }
-
-            /* ultima actualizacion */
-            .update-box {
-                background-color: var(--green-soft);
-                border: 1px solid #bfd9cb;
-                border-radius: 12px;
-                padding: 16px 20px;
-            }
-            .update-box .label {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-            .update-box .value {
-                font-size: 14px;
-                font-weight: 500;
-                margin: 4px 0;
-            }
-            .update-box .note {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 0;
-            }
-
-            /* mensajes */
-            .message-box {
-                display: flex;
-                align-items: flex-start;
-                gap: 10px;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 13px;
-                margin-bottom: 16px;
-            }
-            .message-error {
-                background-color: var(--red-soft);
-                color: var(--red-alert);
-            }
-            .message-success {
-                background-color: var(--green-soft);
-                color: var(--green-success);
-            }
-            .message-box ul {
-                margin: 0;
-                padding-left: 18px;
-            }
-
-            /* botones */
-            .actions-row {
-                display: flex;
-                justify-content: flex-end;
-                gap: 10px;
-                margin-top: 20px;
-            }
-            .btn-primary-brand,
-            .btn-secondary-brand {
-                font-size: 14px;
-                font-weight: 500;
-                border-radius: 8px;
-                min-height: 42px;
-                padding: 6px 20px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
-            }
-            .btn-primary-brand {
-                background-color: var(--green-main);
-                color: #ffffff;
-                border: 1.5px solid var(--green-main);
-            }
-            .btn-primary-brand:hover {
-                background-color: var(--green-medium);
-                border-color: var(--green-medium);
-                color: #ffffff;
-            }
-            .btn-primary-brand:active {
-                background-color: var(--green-dark) !important;
-                color: #ffffff;
-            }
-            .btn-secondary-brand {
-                background-color: #ffffff;
-                color: var(--green-main);
-                border: 1.5px solid var(--green-main);
-            }
-            .btn-secondary-brand:hover {
-                background-color: var(--green-soft);
-                color: var(--green-main);
-                border-color: var(--green-main);
-            }
-            .btn-primary-brand:focus-visible,
-            .btn-secondary-brand:focus-visible {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-
-            /* imagenes (logo e imagen principal) */
-            .upload-row {
-                display: flex;
-                gap: 16px;
-            }
-            .upload-logo {
-                width: 150px;
-                flex-shrink: 0;
-            }
-            .upload-main {
-                flex-grow: 1;
-                min-width: 0;
-            }
-            .upload-preview {
-                height: 120px;
-                border: 1.5px dashed #d0d5dd;
-                border-radius: 8px;
-                background-color: var(--gray-light);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                overflow: hidden;
-            }
-            .upload-preview.on-white {
-                background-color: #ffffff;
-            }
-            .upload-preview img {
-                max-height: 90px;
-                width: auto;
-            }
-            .upload-preview.cover img {
-                max-height: none;
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            }
-            .btn-upload {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                min-height: 34px;
-                margin-top: 10px;
-                padding: 0 12px;
-                border: 1.5px solid var(--green-main);
-                border-radius: 8px;
-                background-color: #ffffff;
-                color: var(--green-main);
-                font-size: 13px;
-                font-weight: 600;
-                cursor: pointer;
-            }
-            .btn-upload:hover {
-                background-color: var(--green-soft);
-            }
-            .btn-upload .icon {
-                width: 15px;
-                height: 15px;
-            }
-            .upload-input {
-                position: absolute;
-                width: 1px;
-                height: 1px;
-                opacity: 0;
-            }
-            .upload-input:focus-visible + .btn-upload {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-            .file-name {
-                display: block;
-                font-size: 12px;
-                color: var(--text-muted);
-                margin-top: 6px;
-            }
-
-            /* listas que se pueden agregar y quitar */
-            .repeat-row {
-                border-top: 1px solid #e5e7eb;
-                margin-top: 14px;
-                padding-top: 12px;
-            }
-            .repeat-row:first-child {
-                margin-top: 4px;
-            }
-            .row-head {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                min-height: 26px;
-                margin-bottom: 8px;
-            }
-            .row-label {
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                color: var(--green-main);
-            }
-            .btn-delete {
-                width: 30px;
-                height: 30px;
-                border: none;
-                border-radius: 8px;
-                background-color: #fff5f4;
-                color: var(--red-alert);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-shrink: 0;
-            }
-            .btn-delete:hover {
-                background-color: var(--red-soft);
-            }
-            .btn-delete:focus-visible {
-                outline: 3px solid var(--blue-accent);
-            }
-            .btn-add {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                min-height: 36px;
-                margin-top: 14px;
-                padding: 0 14px;
-                border: 1.5px dashed var(--green-medium);
-                border-radius: 8px;
-                background-color: #f5f7f6;
-                color: var(--green-main);
-                font-size: 13px;
-                font-weight: 600;
-            }
-            .btn-add:hover {
-                background-color: var(--green-soft);
-            }
-            .btn-add:focus-visible {
-                outline: 3px solid var(--blue-accent);
-                outline-offset: 2px;
-            }
-            .btn-add .icon {
-                width: 15px;
-                height: 15px;
-            }
-            .field-note {
-                font-size: 12px;
-                color: var(--text-muted);
-                margin: 6px 0 0 0;
-            }
-
-            /* ---------- Submodulos del menu lateral ---------- */
-            .sidebar-menu a.parent-active {
-                border-left-color: #ffffff;
-                font-weight: 600;
-            }
-            .sidebar-menu a .chevron {
-                margin-left: auto;
-                width: 16px;
-                height: 16px;
-            }
-            .submenu {
-                list-style: none;
-                margin: 0;
-                padding: 2px 0 8px 0;
-                background-color: rgba(0, 0, 0, 0.14);
-            }
-            .submenu a {
-                padding: 7px 18px 7px 46px;
-                font-size: 12.5px;
-            }
-            .submenu a.active {
-                background-color: var(--green-medium);
-                border-left-color: #ffffff;
-                font-weight: 500;
-            }
-
-            /* ---------- Encabezado de la pagina ---------- */
-            .breadcrumb-line {
-                font-size: 13px;
-                color: var(--text-muted);
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                margin-bottom: 8px;
-                flex-wrap: wrap;
-            }
-            .breadcrumb-line a {
-                color: var(--blue-accent);
-                text-decoration: none;
-            }
-            .breadcrumb-line a:hover {
-                text-decoration: underline;
-            }
-            .breadcrumb-line .icon {
-                width: 13px;
-                height: 13px;
-            }
-
-            /* tarjeta de ayuda (columna derecha) */
-            .help-list {
-                list-style: none;
-                margin: 0;
-                padding: 0;
-            }
-            .help-list li {
-                display: flex;
-                gap: 10px;
-                font-size: 13px;
-                color: var(--text-main);
-                margin-bottom: 12px;
-                line-height: 1.45;
-            }
-            .help-list li:last-child {
-                margin-bottom: 0;
-            }
-            .help-list .icon {
-                color: var(--green-main);
-                margin-top: 2px;
-                width: 16px;
-                height: 16px;
-            }
-
-            /* imagenes apiladas dentro de la columna derecha */
-            .upload-row.stacked {
-                flex-direction: column;
-                gap: 20px;
-            }
-            .upload-row.stacked .upload-logo {
-                width: 100%;
-            }
-            .upload-row.stacked .upload-preview {
-                height: 130px;
-            }
-
-            /* la columna verde del menu llega hasta abajo aunque la pagina sea larga */
-            .admin-layout {
-                background: linear-gradient(to right, var(--green-main) 220px, transparent 220px);
-            }
-            @media (max-width: 991.98px) {
-                .admin-layout {
-                    background: none;
-                }
-            }
-            .form-layout.equal {
-                grid-template-columns: 1fr 1fr;
-            }
-            @media (max-width: 991.98px) {
-                .form-layout.equal {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            /* pantallas medianas y chicas: el menu pasa arriba */
-            @media (max-width: 991.98px) {
-                .admin-layout {
-                    flex-direction: column;
-                }
-                .sidebar {
-                    width: 100%;
-                    height: auto;
-                    position: static;
-                }
-                .admin-main {
-                    padding: 28px 20px;
-                }
-                .form-layout {
-                    grid-template-columns: 1fr;
-                }
-            }
-        </style>
-        <style data-ajuste="2">
-            .admin-layout {
-                background: linear-gradient(to right, var(--green-main) 200px, transparent 200px);
-            }
-            .sidebar {
-                width: 200px;
-            }
-            .sidebar-brand img {
-                height: 38px;
-            }
-            .sidebar-menu a {
-                padding: 8px 16px;
-                font-size: 12.5px;
-            }
-            .admin-main {
-                padding: 28px 32px;
-            }
-            .admin-content {
-                max-width: 1360px;
-            }
-            .table-lib thead th,
-            .table-lib td {
-                padding: 10px 12px;
-                font-size: 13px;
-            }
-            .page-title {
-                font-size: 24px;
-            }
-            .page-subtitle {
-                font-size: 13px;
-            }
-            .panel-head {
-                padding: 16px 20px;
-            }
-            .panel-head h2 {
-                font-size: 20px;
-            }
-            .panel-head p {
-                font-size: 13px;
-            }
-            .icon-circle {
-                width: 40px;
-                height: 40px;
-            }
-            .btn-brand,
-            .btn-outline-brand,
-            .btn-brand-outline,
-            .btn-danger-outline {
-                min-height: 36px;
-                padding: 6px 14px;
-                font-size: 13px;
-            }
-        </style>
+        <link rel="stylesheet" href="./css/biblioteca_politicas.css" />
     </head>
-
     <body>
         <!-- Iconos (set Lucide, trazo lineal) -->
         <svg xmlns="http://www.w3.org/2000/svg" style="display: none">
@@ -937,11 +327,9 @@ $pagina_activa = "datos_biblioteca_politicas.php";
                 <circle cx="12" cy="9" r="2" />
             </symbol>
         </svg>
-
         <div class="admin-layout">
             <!-- Menu lateral del bibliotecario -->
             <?php include "includes/sidebar_bibliotecario.php"; ?>
-
             <!-- Contenido -->
             <main class="admin-main">
                 <div class="admin-content">
@@ -953,9 +341,20 @@ $pagina_activa = "datos_biblioteca_politicas.php";
                     <h1 class="page-title">Políticas del servicio</h1>
                     <p class="page-subtitle">Edita las secciones de la página de políticas y condiciones del servicio bibliotecario.</p>
 
-                    <!-- Mensajes -->
-
+                    <?php if ($error !== ""): ?>
+                        <div class="alert alert-danger" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, "UTF-8") ?></div>
+                    <?php endif; ?>
+                    <?php if ($mensaje !== ""): ?>
+                        <div class="alert alert-success" role="status"><?= htmlspecialchars($mensaje, ENT_QUOTES, "UTF-8") ?></div>
+                    <?php endif; ?>
+                    <?php if (!$politicasDesdeBD): ?>
+                        <div class="alert alert-warning" role="alert">
+                            No se encontraron políticas guardadas. Puedes agregar una sección si la consulta fue correcta.
+                        </div>
+                    <?php endif; ?>
                     <form action="" method="POST">
+                        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf_politicas"], ENT_QUOTES, "UTF-8") ?>" />
+                        <input type="hidden" name="revision" value="<?= htmlspecialchars($revision, ENT_QUOTES, "UTF-8") ?>" />
                         <div class="form-layout">
                             <!-- Columna izquierda -->
                             <div class="form-column">
@@ -969,80 +368,39 @@ $pagina_activa = "datos_biblioteca_politicas.php";
                                             <p class="card-subtitle">Cada sección tiene un título y su contenido.</p>
                                         </div>
                                     </div>
-
                                     <div id="lista-politica" data-list data-label="Sección">
-                                        <div class="repeat-row">
-                                            <div class="row-head">
-                                                <span class="row-label">Sección 1</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
-                                                    <svg class="icon"><use href="#i-trash" /></svg>
-                                                </button>
+                                        <?php foreach ($politicas as $indice => $politica): ?>
+                                            <div class="repeat-row">
+                                                <input type="hidden" name="politica_id[]" value="<?= (int) $politica["id_politica"] ?>" />
+                                                <div class="row-head">
+                                                    <span class="row-label">Sección <?= $indice + 1 ?></span>
+                                                    <button type="button" class="btn-delete" aria-label="Eliminar sección">
+                                                        <svg class="icon"><use href="#i-trash" /></svg>
+                                                    </button>
+                                                </div>
+                                                <input
+                                                    type="text"
+                                                    name="politica_titulo[]"
+                                                    class="form-control mb-2"
+                                                    placeholder="Título de la sección"
+                                                    maxlength="200"
+                                                    value="<?= htmlspecialchars((string) $politica["titulo"], ENT_QUOTES, "UTF-8") ?>"
+                                                    required
+                                                />
+                                                <textarea
+                                                    name="politica_contenido[]"
+                                                    class="form-control"
+                                                    rows="3"
+                                                    maxlength="6000"
+                                                    placeholder="Contenido de la sección"
+                                                    required
+                                                ><?= htmlspecialchars((string) $politica["contenido"], ENT_QUOTES, "UTF-8") ?></textarea>
                                             </div>
-                                            <input
-                                                type="text"
-                                                name="politica_titulo[]"
-                                                class="form-control mb-2"
-                                                placeholder="[Título de la sección]"
-                                                value="[Título de la sección]"
-                                            />
-                                            <textarea
-                                                name="politica_contenido[]"
-                                                class="form-control"
-                                                rows="3"
-                                                placeholder="[Contenido de la sección]"
-                                            >
-[Contenido de la sección]</textarea
-                                            >
-                                        </div>
-                                        <div class="repeat-row">
-                                            <div class="row-head">
-                                                <span class="row-label">Sección 2</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
-                                                    <svg class="icon"><use href="#i-trash" /></svg>
-                                                </button>
-                                            </div>
-                                            <input
-                                                type="text"
-                                                name="politica_titulo[]"
-                                                class="form-control mb-2"
-                                                placeholder="[Título de la sección]"
-                                                value="[Título de la sección]"
-                                            />
-                                            <textarea
-                                                name="politica_contenido[]"
-                                                class="form-control"
-                                                rows="3"
-                                                placeholder="[Contenido de la sección]"
-                                            >
-[Contenido de la sección]</textarea
-                                            >
-                                        </div>
-                                        <div class="repeat-row">
-                                            <div class="row-head">
-                                                <span class="row-label">Sección 3</span>
-                                                <button type="button" class="btn-delete" aria-label="Eliminar">
-                                                    <svg class="icon"><use href="#i-trash" /></svg>
-                                                </button>
-                                            </div>
-                                            <input
-                                                type="text"
-                                                name="politica_titulo[]"
-                                                class="form-control mb-2"
-                                                placeholder="[Título de la sección]"
-                                                value="[Título de la sección]"
-                                            />
-                                            <textarea
-                                                name="politica_contenido[]"
-                                                class="form-control"
-                                                rows="3"
-                                                placeholder="[Contenido de la sección]"
-                                            >
-[Contenido de la sección]</textarea
-                                            >
-                                        </div>
+                                        <?php endforeach; ?>
                                     </div>
                                     <template id="tpl-lista-politica">
                                         <div class="repeat-row">
+                                            <input type="hidden" name="politica_id[]" value="0" />
                                             <div class="row-head">
                                                 <span class="row-label">Sección 0</span>
                                                 <button type="button" class="btn-delete" aria-label="Eliminar">
@@ -1053,24 +411,24 @@ $pagina_activa = "datos_biblioteca_politicas.php";
                                                 type="text"
                                                 name="politica_titulo[]"
                                                 class="form-control mb-2"
-                                                placeholder="[Título de la sección]"
-                                                value=""
+                                                placeholder="Título de la sección"
+                                                maxlength="200"
+                                                value="" required
                                             />
                                             <textarea
                                                 name="politica_contenido[]"
                                                 class="form-control"
                                                 rows="3"
-                                                placeholder="[Contenido de la sección]"
+                                                maxlength="6000"
+                                                placeholder="Contenido de la sección" required
                                             ></textarea>
                                         </div>
                                     </template>
-
                                     <button type="button" class="btn-add" data-add="lista-politica">
                                         <svg class="icon"><use href="#i-plus" /></svg> Agregar sección
                                     </button>
                                 </section>
                             </div>
-
                             <!-- Columna derecha -->
                             <div class="form-column">
                                 <section class="form-card">
@@ -1090,28 +448,28 @@ $pagina_activa = "datos_biblioteca_politicas.php";
                                         </li>
                                         <li>
                                             <svg class="icon"><use href="#i-info" /></svg
-                                            ><span>Cada renglón del contenido se muestra como un punto de la lista.</span>
+                                            ><span>El contenido de una línea se muestra como párrafo; varias líneas se muestran como puntos.</span>
                                         </li>
                                         <li>
                                             <svg class="icon"><use href="#i-info" /></svg
-                                            ><span>El límite de libros y la multa por día se toman de los parámetros del sistema.</span>
+                                            ><span>El contenido se muestra como está guardado. Verifica que límites y montos coincidan con las reglas vigentes.</span>
                                         </li>
                                     </ul>
                                 </section>
-
                                 <!-- Ultima actualizacion -->
                                 <div class="update-box">
                                     <p class="label">Última actualización</p>
-                                    <p class="value">12/11/2026, 10:15 · [Nombre completo]</p>
-                                    <p class="note">La fecha, la hora y el usuario lo registra el sistema al guardar.</p>
+                                    <p class="value">
+                                        <?= htmlspecialchars($ultimaActualizacion, ENT_QUOTES, "UTF-8") ?>
+                                    </p>
+                                    <p class="note">La fecha se actualiza al guardar las políticas.</p>
                                 </div>
                             </div>
                         </div>
-
                         <!-- Botones -->
                         <div class="actions-row">
                             <a href="panel_control.php" class="btn btn-secondary-brand">Cancelar</a>
-                            <button type="submit" class="btn btn-primary-brand">
+                            <button type="submit" class="btn btn-primary-brand" <?= !$cargaCorrecta ? "disabled" : "" ?>>
                                 <svg class="icon"><use href="#i-circle-check" /></svg> Guardar cambios
                             </button>
                         </div>
@@ -1119,10 +477,8 @@ $pagina_activa = "datos_biblioteca_politicas.php";
                 </div>
             </main>
         </div>
-
         <?php include "includes/iconos.php"; ?>
         <?php include "includes/iconos_catalogo.php"; ?>
-
         <script src="./js/bootstrap.bundle.min.js"></script>
         <script src="./js/ver_password.js"></script>
         <script>
@@ -1132,22 +488,22 @@ $pagina_activa = "datos_biblioteca_politicas.php";
                     etiqueta.textContent = lista.dataset.label + " " + (i + 1);
                 });
             }
-
             // botones "Agregar": copian el renglon vacio de la plantilla
             document.querySelectorAll("[data-add]").forEach(function (boton) {
                 boton.addEventListener("click", function () {
                     var lista = document.getElementById(boton.dataset.add);
                     var plantilla = document.getElementById("tpl-" + boton.dataset.add);
+                    if (lista.querySelectorAll(".repeat-row").length >= 30) return;
                     lista.appendChild(plantilla.content.cloneNode(true));
                     numerarLista(lista);
                 });
             });
-
             // botones de borrar renglon
             document.addEventListener("click", function (evento) {
                 var boton = evento.target.closest(".btn-delete");
                 if (!boton) return;
                 var lista = boton.closest("[data-list]");
+                if (!lista || lista.querySelectorAll(".repeat-row").length <= 1) return;
                 boton.closest(".repeat-row").remove();
                 numerarLista(lista);
             });
