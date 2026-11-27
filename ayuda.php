@@ -8,7 +8,7 @@ if (isset($_SESSION["id_bibliotecario"])) {
 }
 
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_ayuda.php";
 $pagina_activa = "ayuda.php";
 
@@ -16,7 +16,7 @@ $pagina_activa = "ayuda.php";
 $correo_biblioteca = "";
 
 // Temas que dio de alta el bibliotecario
-$temas = temas_de_ayuda($pdo);
+$temas = temas_de_ayuda($conexion);
 ?>
 <!doctype html>
 <html lang="es">

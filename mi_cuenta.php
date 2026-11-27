@@ -1,18 +1,35 @@
 <?php
 require "includes/sesion.php";
 exigir_lector();
-require "config/conexion.php"; // aquí viene la conexión $pdo
+require "config/conexion.php"; // aquí viene la conexión $conexion
 require "includes/consultas_lector.php";
 $pagina_activa = "mi_cuenta.php";
 
 // Datos de las tarjetas de resumen
-$prestamos = prestamos_del_lector($pdo);
-$reservas = reservas_del_lector($pdo);
-[$multas, $total_multas] = adeudos_del_lector($pdo);
-$avisos_nuevos = contar_avisos_nuevos($pdo);
-$carrera = carrera_del_lector($pdo);
+$prestamos = prestamos_del_lector($conexion);
+$reservas = reservas_del_lector($conexion);
+[$adeudos, $resumen_adeudos] = adeudos_del_lector($conexion);
+$total_multas = $resumen_adeudos["total"];
+$avisos_nuevos = contar_avisos_nuevos($conexion);
+$carrera = carrera_del_lector($conexion);
 
-$vencidos = count($multas);
+// Préstamos vencidos (los que ya pasaron su fecha de devolución)
+$vencidos = 0;
+
+foreach ($prestamos as $prestamo) {
+    if ($prestamo["vencido"]) {
+        $vencidos++;
+    }
+}
+
+// Texto de la tarjeta de adeudos: multas, reposiciones o nada pendiente
+if ($total_multas > 0) {
+    $texto_adeudos = "Multas pendientes";
+} elseif ($resumen_adeudos["reposiciones"] > 0) {
+    $texto_adeudos = plural($resumen_adeudos["reposiciones"], "reposición pendiente", "reposiciones pendientes");
+} else {
+    $texto_adeudos = "Sin adeudos pendientes";
+}
 
 // Mensaje guardado por otra página (por ejemplo, cambiar_password.php).
 // Si es un error de la ventana de contraseña, se muestra dentro de la ventana y esta se abre sola.
@@ -43,10 +60,10 @@ $resumen = [
         "i-triangle-alert",
         "Adeudos",
         dinero($total_multas),
-        $total_multas > 0 ? "Multas pendientes" : "Sin multas pendientes",
+        $texto_adeudos,
         "mis_adeudos.php",
         "Ver mis adeudos",
-        $total_multas > 0 ? "is-danger" : "",
+        $resumen_adeudos["pendientes"] > 0 ? "is-danger" : "",
     ],
     [
         "i-bell",

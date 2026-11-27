@@ -13,7 +13,7 @@ $nombre_lector = htmlspecialchars($_SESSION["nombre"] ?? "Lector");
 require_once __DIR__ . "/../config/conexion.php";
 require_once __DIR__ . "/consultas_lector.php";
 $es_lector_ahora = ($_SESSION["tipo"] ?? "") === "lector";
-$avisos_nuevos = $es_lector_ahora ? contar_avisos_nuevos($pdo) : 0;
+$avisos_nuevos = $es_lector_ahora ? contar_avisos_nuevos($conexion) : 0;
 $tipo_lector = $es_lector_ahora ? tipo_de_lector() : "Invitado";
 ?>
 <header class="site-header d-flex align-items-center">
